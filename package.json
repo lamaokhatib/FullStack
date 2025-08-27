@@ -19,6 +19,7 @@
   "homepage": "https://github.com/lamaokhatib/FullStack#readme",
   "dependencies": {
     "express": "^5.1.0",
-    "multer": "^2.0.2"
+    "multer": "^2.0.2",
+    "xlsx": "^0.18.5"
   }
 }
