@@ -1,6 +1,6 @@
 # Dell Project
 
-A Node.js Express app for managing restaurant orders.
+A Node.js Express app for managing.
 
 ## Structure
 - controllers: Handles HTTP requests
