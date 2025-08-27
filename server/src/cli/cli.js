@@ -1,7 +1,7 @@
 const readline = require('readline');
 const fs = require('fs');
 const path = require('path');
-const analyzeFile = require('./analyzeFile');
+const fileHandler = require('../utils/fileHandler');
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -10,7 +10,7 @@ const rl = readline.createInterface({
 
 rl.question('Enter a file path: ', async (filePath) => {
   try {
-    const columns = await analyzeFile(filePath);
+    const columns = await fileHandler(filePath);
     console.log('\nDetected columns:\n', JSON.stringify(columns, null, 2));
 
     // Save the file into dbs/
