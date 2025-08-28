@@ -2,6 +2,7 @@
 if (process.env.NODE_ENV !== 'production') {
   require('dotenv').config();
 }
+const { sendJsonAndTextToOpenAI } = require('./utils/sendJsonAndTextToOpenAI');
 
 const express = require('express');
 const cors = require('cors');
@@ -33,14 +34,32 @@ app.post('/upload', upload.single('file'), async (req, res) => {
   try {
     const filePath = req.file.path;
     const columns = await fileHandler(filePath); // returns your parsed schema/columns
-    res.json({
+    
+    
+// needs to be changed so it takes the user prompt as an input from ui - front end 
+    const userPrompt = `
+Schema JSON from uploaded file "${req.file.originalname}". 
+return all likes of user with id = 1  
+.
+`.trim();
+
+    // Send automatically to OpenAI
+    const aiText = await sendJsonAndTextToOpenAI({
+      jsonObject: columns,
+      text: userPrompt,
+      model: 'gpt-4o-mini'
+    });
+     res.json({
       message: 'File uploaded and analyzed successfully',
       file: req.file.originalname,
-      columns
+      columns,
+      openai: aiText
     });
+
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: err.message });
+    const msg = err?.error?.message || err?.response?.data?.error?.message || err.message || 'Unknown error';
+    res.status(500).json({ error: msg });
   }
 });
 
