@@ -9,7 +9,7 @@ const cors = require('cors');
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
-const fileHandler = require('./utils/fileHandler'); // <-- moved under server/src/utils (adjust if needed)
+const fileHandler = require('./utils/fileHandler');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -17,10 +17,10 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json({ limit: '2mb' }));
 
-// Multer setup (disk storage in ./server/src/dbs)
+// Multer setup (disk storage)
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadPath = path.join(__dirname, 'server', 'src', 'dbs');
+    const uploadPath = path.join(__dirname, 'server', 'src', 'dbs'); // or wherever you prefer
     if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
     cb(null, uploadPath);
   },
@@ -28,34 +28,35 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// Your existing endpoint (unchanged)
+// ⬇️ UPDATED: now reads req.body.prompt sent from the UI
 app.post('/upload', upload.single('file'), async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+
   try {
     const filePath = req.file.path;
-    const columns = await fileHandler(filePath); // returns your parsed schema/columns
-    
-    
-// needs to be changed so it takes the user prompt as an input from ui - front end 
-    const userPrompt = `
-Schema JSON from uploaded file "${req.file.originalname}". 
-return all likes of user with id = 1  
-.
-`.trim();
+    const columns = await fileHandler(filePath);
 
-    // Send automatically to OpenAI
+    // read prompt from multipart field "prompt"
+    const prompt = (typeof req.body?.prompt === 'string' ? req.body.prompt : '').trim();
+    if (!prompt) {
+      return res.status(400).json({
+        error: 'Missing prompt. Send it as a form-data field named "prompt" along with the file.'
+      });
+    }
+
+    // Send to OpenAI (schema + user prompt)
     const aiText = await sendJsonAndTextToOpenAI({
       jsonObject: columns,
-      text: userPrompt,
-      model: 'gpt-4o-mini'
+      text: prompt,
+      model: 'gpt-4o-mini' // or o3-mini if you prefer stronger reasoning
     });
-     res.json({
+
+    res.json({
       message: 'File uploaded and analyzed successfully',
       file: req.file.originalname,
       columns,
       openai: aiText
     });
-
   } catch (err) {
     console.error(err);
     const msg = err?.error?.message || err?.response?.data?.error?.message || err.message || 'Unknown error';
@@ -63,7 +64,7 @@ return all likes of user with id = 1
   }
 });
 
-// NEW: mount AI routes
+// AI routes (if you have others)
 app.use('/api/ai', require('./routers/ai.router'));
 
 app.listen(port, () => {
