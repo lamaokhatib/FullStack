@@ -18,8 +18,11 @@
   },
   "homepage": "https://github.com/lamaokhatib/FullStack#readme",
   "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.1",
     "express": "^5.1.0",
     "multer": "^2.0.2",
+    "openai": "^5.16.0",
     "xlsx": "^0.18.5"
   }
 }
