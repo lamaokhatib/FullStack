@@ -64,8 +64,6 @@ app.post('/upload', upload.single('file'), async (req, res) => {
   }
 });
 
-// AI routes (if you have others)
-app.use('/api/ai', require('./routers/ai.router'));
 
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
