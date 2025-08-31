@@ -1,5 +1,33 @@
 const fs = require('fs');
 const path = require('path');
+const sqlite3 = require('sqlite3').verbose();
+
+const parseDBSchema = (filePath) => {
+  return new Promise((resolve, reject) => {
+    const db = new sqlite3.Database(filePath, sqlite3.OPEN_READONLY, (err) => {
+      if (err) return reject(err);
+    });
+
+    const schema = {};
+    db.all(`SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%';`, [], (err, tables) => {
+      if (err) return reject(err);
+
+      let remaining = tables.length;
+      if (remaining === 0) return resolve(schema);
+
+      tables.forEach(({ name }) => {
+        db.all(`PRAGMA table_info(${name})`, [], (err, columns) => {
+          if (err) return reject(err);
+          schema[name] = columns.map(col => col.name);
+          if (--remaining === 0) {
+            db.close();
+            resolve(schema);
+          }
+        });
+      });
+    });
+  });
+};
 
 // CSV Handler
 const handleCSV = (filePath) => {
@@ -70,6 +98,16 @@ const handleSQL = (filePath) => {
   }
 };
 
+const handleDB = async (filePath) => {
+  try {
+    const dbSchema = await parseDBSchema(filePath);
+    return dbSchema;
+  } catch (err) {
+    return { error: `DB parsing failed: ${err.message}` };
+  }
+};
+
+
 // Main Handler
 const handleFile = async (filePath) => {
   const ext = path.extname(filePath).toLowerCase();
@@ -77,6 +115,7 @@ const handleFile = async (filePath) => {
   if (ext === '.csv') return handleCSV(filePath);
   if (ext === '.json') return handleJSON(filePath);
   if (ext === '.sql') return handleSQL(filePath);
+  if (ext === '.db') return handleDB(filePath);
 
   throw new Error('Unsupported file type: ' + ext);
 };

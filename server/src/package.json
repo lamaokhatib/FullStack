@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "main": "expressserver.js",
   "dependencies": {
+    "dotenv": "^17.2.1",
     "express": "^4.18.2",
-    "nodemailer": "^6.9.4"
+    "nodemailer": "^6.9.4",
+    "sqlite3": "^5.1.7"
   }
 }
