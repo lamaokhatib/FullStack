@@ -1,26 +1,36 @@
 // server.js
-if (process.env.NODE_ENV !== 'production') {
-  require('dotenv').config();
-}
-const { sendJsonAndTextToOpenAI } = require('./utils/sendJsonAndTextToOpenAI');
+import express from "express";
+import dotenv from "dotenv";
+import cors from "cors";
+import multer from "multer";
+import path from "path";
+import fs from "fs";
+import { fileURLToPath } from "url";
+import chatRoutes from "./routers/chatRoutes.js";
+import fileHandler from "./utils/fileHandler.js";
+import { sendJsonAndTextToOpenAI } from "./utils/sendJsonAndTextToOpenAI.js";
 
-const express = require('express');
-const cors = require('cors');
-const multer = require('multer');
-const path = require('path');
-const fs = require('fs');
-const fileHandler = require('./utils/fileHandler');
+// Env setup
+dotenv.config();
+
+// For __dirname in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
+// Middleware
 app.use(cors());
-app.use(express.json({ limit: '2mb' }));
+app.use(express.json({ limit: "2mb" }));
 
-// Multer setup (disk storage)
+// API routes
+app.use("/api", chatRoutes);
+
+// Multer setup for file uploads
 const storage = multer.diskStorage({
   destination: (req, file, cb) => {
-    const uploadPath = path.join(__dirname, 'server', 'src', 'dbs'); // or wherever you prefer
+    const uploadPath = path.join(__dirname, "dbs");
     if (!fs.existsSync(uploadPath)) fs.mkdirSync(uploadPath, { recursive: true });
     cb(null, uploadPath);
   },
@@ -28,43 +38,39 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage });
 
-// ⬇️ UPDATED: now reads req.body.prompt sent from the UI
-app.post('/upload', upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
+// Upload + OpenAI endpoint
+app.post("/upload", upload.single("file"), async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: "No file uploaded" });
 
   try {
     const filePath = req.file.path;
     const columns = await fileHandler(filePath);
 
-    // read prompt from multipart field "prompt"
-    const prompt = (typeof req.body?.prompt === 'string' ? req.body.prompt : '').trim();
+    const prompt = (typeof req.body?.prompt === "string" ? req.body.prompt : "").trim();
     if (!prompt) {
       return res.status(400).json({
         error: 'Missing prompt. Send it as a form-data field named "prompt" along with the file.'
       });
     }
 
-    // Send to OpenAI (schema + user prompt)
     const aiText = await sendJsonAndTextToOpenAI({
       jsonObject: columns,
       text: prompt,
-      model: 'gpt-4o-mini' // or o3-mini if you prefer stronger reasoning
+      model: "gpt-4o-mini"
     });
 
     res.json({
-      message: 'File uploaded and analyzed successfully',
+      message: "File uploaded and analyzed successfully",
       file: req.file.originalname,
       columns,
       openai: aiText
     });
   } catch (err) {
     console.error(err);
-    const msg = err?.error?.message || err?.response?.data?.error?.message || err.message || 'Unknown error';
+    const msg = err?.error?.message || err?.response?.data?.error?.message || err.message || "Unknown error";
     res.status(500).json({ error: msg });
   }
 });
 
-
-app.listen(port, () => {
-  console.log(`Server running at http://localhost:${port}`);
-});
+// Start server
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
