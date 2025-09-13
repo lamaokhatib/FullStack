@@ -1,25 +1,20 @@
 // controllers/uploadController.js
 import { processUploadAndAnalyze } from "../services/uploadService.js";
 
-export const handleFileUpload = async (req, res) => {
+export const uploadHandler = async (req, res) => {
   try {
-    if (!req.file) return res.status(400).json({ error: "No file uploaded" });
+    // file is available thanks to multer middleware
+    const filePath = req.file?.path; // if you switch to diskStorage
+    const prompt = req.body.text;
 
-    const { path: filePath, originalname } = req.file;
-    const prompt = (typeof req.body?.prompt === "string" ? req.body.prompt : "").trim();
-
-    const { columns, aiText } = await processUploadAndAnalyze(filePath, prompt);
+    const result = await processUploadAndAnalyze(filePath, prompt);
 
     res.json({
-      message: "File uploaded and analyzed successfully",
-      file: originalname,
-      columns,
-      openai: aiText,
+      reply: result.aiText,
+      schema: result.columns,
     });
   } catch (err) {
-    console.error(err);
-    const msg =
-      err?.error?.message || err?.response?.data?.error?.message || err.message || "Unknown error";
-    res.status(500).json({ error: msg });
+    console.error("Upload error:", err);
+    res.status(500).json({ error: err.message });
   }
 };

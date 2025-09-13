@@ -1,20 +1,33 @@
-const multer = require('multer');
+import multer from "multer";
+import path from "path";
+import fs from "fs";
 
-const storage = multer.memoryStorage();
+const uploadFolder = path.join(process.cwd(), "uploads");
+if (!fs.existsSync(uploadFolder)) fs.mkdirSync(uploadFolder);
+
+const storage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, uploadFolder),
+  filename: (req, file, cb) => cb(null, Date.now() + "-" + file.originalname),
+});
 
 const fileFilter = (req, file, cb) => {
-  if (file.mimetype === 'application/json' ||
-      file.originalname.toLowerCase().endsWith('.json')) {
+  if (
+    file.mimetype === "application/json" ||
+    file.originalname.toLowerCase().endsWith(".json") ||
+    file.originalname.toLowerCase().endsWith(".db") ||
+    file.originalname.toLowerCase().endsWith(".sql") ||
+    file.originalname.toLowerCase().endsWith(".csv")
+  ) {
     cb(null, true);
   } else {
-    cb(new Error('Only JSON files are allowed'), false);
+    cb(new Error("Only JSON, DB, SQL, or CSV files are allowed"), false);
   }
 };
 
 const uploadJson = multer({
   storage,
   fileFilter,
-  limits: { fileSize: 2 * 1024 * 1024 } // 2MB
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB
 });
 
-module.exports = uploadJson;
+export default uploadJson;
