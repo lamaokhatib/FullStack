@@ -1,10 +1,12 @@
-  const OpenAI = require('openai');
-  require('dotenv').config();
+import OpenAI from 'openai';
+import dotenv from 'dotenv';
 
-  if (!process.env.OPENAI_API_KEY) {
-    throw new Error('OPENAI_API_KEY is not set. Put it in .env (not committed)');
-  }
+dotenv.config();
 
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+if (!process.env.OPENAI_API_KEY) {
+  throw new Error('OPENAI_API_KEY is not set. Put it in .env (not committed)');
+}
 
-  module.exports = openai;
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+export default openai;
