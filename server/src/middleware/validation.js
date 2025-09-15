@@ -1,6 +1,9 @@
-// Validation middleware 
+//src/middleware/validation.js
 
-module.exports = function (req, res, next) {
-  // Example: validate  data
+// Validation middleware (ESM version)
+
+export default function (req, res, next) {
+  // Example: validate request data
+  // You can expand this later with checks
   next();
-};
+}

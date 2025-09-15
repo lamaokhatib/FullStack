@@ -1,4 +1,5 @@
-const openai = require('../utils/openaiClient');
+//src/cli/createAssistant.js
+import openai from '../utils/openaiClient.js';
 
 async function createAssistant() {
   try {
@@ -10,7 +11,7 @@ Input will contain:
 1) A database schema in JSON...
 (rules here, same as your system prompt)
 `,
-      model: "gpt-4.1", // or gpt-5 if you have access
+      model: "gpt-4o-mini" // unified with the rest of your app
     });
 
     console.log("Assistant created:", assistant.id);
@@ -20,3 +21,4 @@ Input will contain:
 }
 
 createAssistant();
+

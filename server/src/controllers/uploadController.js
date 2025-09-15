@@ -1,3 +1,4 @@
+//src/controllers/uploadController.js
 import { processUploadAndAnalyze } from "../services/uploadService.js";
 
 export const handleFileUpload = async (req, res) => {
@@ -6,13 +7,17 @@ export const handleFileUpload = async (req, res) => {
 
     const { path: filePath, originalname } = req.file;
     const prompt = (typeof req.body?.prompt === "string" ? req.body.prompt : "").trim();
+    const threadId = req.body?.threadId || null;
 
-    const { columns, aiText } = await processUploadAndAnalyze(filePath, prompt);
+    const { columns, aiText, threadId: newThreadId } =
+      await processUploadAndAnalyze(filePath, prompt, threadId);
+
     res.json({
       message: "File uploaded and analyzed successfully",
       file: originalname,
       columns,
       openai: aiText,
+      threadId: newThreadId, // ✅ return threadId
     });
   } catch (err) {
     console.error(err);

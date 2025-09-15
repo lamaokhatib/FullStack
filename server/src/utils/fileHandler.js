@@ -1,6 +1,8 @@
-const fs = require('fs');
-const path = require('path');
-const sqlite3 = require('sqlite3').verbose();
+//src/utils/fileHandler.js
+import fs from 'fs';
+import path from 'path';
+import sqlite3Pkg from 'sqlite3';
+const sqlite3 = sqlite3Pkg.verbose();
 
 const parseDBSchema = (filePath) => {
   return new Promise((resolve, reject) => {
@@ -120,4 +122,4 @@ const handleFile = async (filePath) => {
   throw new Error('Unsupported file type: ' + ext);
 };
 
-module.exports = handleFile;
+export default handleFile;
