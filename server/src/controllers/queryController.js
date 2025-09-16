@@ -50,12 +50,16 @@ Use realistic sample data if needed.`
       } else if (parsed.rows && Array.isArray(parsed.rows)) {
         rows = parsed.rows;
       }
+      console.log("=== PARSED ROWS ===");
+      console.log(rows);  // <--- log what we’ll send back
     } catch (err) {
       console.error("Failed to parse OpenAI response:", err.message);
       return res.status(500).json({ error: "AI returned invalid JSON" });
     }
-
+    console.log("=== FINAL RESPONSE SENT TO FRONTEND ===");
+    console.log({ rows });
     res.json({ rows });
+
   } catch (err) {
     console.error("Run query error:", err);
     res.status(500).json({ error: err.message });
