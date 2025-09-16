@@ -1,4 +1,4 @@
-// Simple database state manager for SQL file uploads
+//src/config/dbState.js
 let dbPath = null;
 
 export function setDb(path) {
