@@ -1,7 +1,8 @@
-const readline = require('readline');
-const fs = require('fs');
-const path = require('path');
-const fileHandler = require('../utils/fileHandler');
+//src/cli/cli.js
+import readline from 'readline';
+import fs from 'fs';
+import path from 'path';
+import fileHandler from '../utils/fileHandler.js';
 
 const rl = readline.createInterface({
   input: process.stdin,
@@ -14,7 +15,7 @@ rl.question('Enter a file path: ', async (filePath) => {
     console.log('\nDetected columns:\n', JSON.stringify(columns, null, 2));
 
     // Save the file into dbs/
-    const dbsFolder = path.join(__dirname, 'dbs');
+    const dbsFolder = path.join(process.cwd(), 'src', 'dbs');
     if (!fs.existsSync(dbsFolder)) fs.mkdirSync(dbsFolder);
     const destPath = path.join(dbsFolder, path.basename(filePath));
     fs.copyFileSync(filePath, destPath);
@@ -25,3 +26,4 @@ rl.question('Enter a file path: ', async (filePath) => {
 
   rl.close();
 });
+

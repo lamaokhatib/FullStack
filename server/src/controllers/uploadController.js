@@ -1,4 +1,5 @@
 import { processUploadAndAnalyze } from "../services/uploadService.js";
+import { setDb } from "../config/dbState.js";   // ✅ import
 
 export const handleFileUpload = async (req, res) => {
   try {
@@ -6,13 +7,20 @@ export const handleFileUpload = async (req, res) => {
 
     const { path: filePath, originalname } = req.file;
     const prompt = (typeof req.body?.prompt === "string" ? req.body.prompt : "").trim();
+    const threadId = req.body?.threadId || null;
 
-    const { columns, aiText } = await processUploadAndAnalyze(filePath, prompt);
+    // ✅ Save uploaded DB path so queries can run later
+    setDb(filePath);
+
+    const { columns, aiText, threadId: newThreadId } =
+      await processUploadAndAnalyze(filePath, prompt, threadId);
+
     res.json({
       message: "File uploaded and analyzed successfully",
       file: originalname,
       columns,
       openai: aiText,
+      threadId: newThreadId,
     });
   } catch (err) {
     console.error(err);

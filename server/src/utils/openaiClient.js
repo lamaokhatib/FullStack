@@ -1,3 +1,4 @@
+//src/utils/openaiClient.js
 import OpenAI from 'openai';
 import dotenv from 'dotenv';
 

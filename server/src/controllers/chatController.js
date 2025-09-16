@@ -1,15 +1,18 @@
 // controllers/chatController.js
-import { generateSqlFromSchema } from "../services/chatService.js";
+import { chatFlowWithAssistant } from "../services/chatService.js";
 
 export const chatWithSqlAssistant = async (req, res) => {
   try {
-    const { schema, request } = req.body;
+    const { threadId, message } = req.body;
+    if (!message?.trim()) {
+      return res.status(400).json({ error: "Message is required" });
+    }
 
-    const sqlQuery = await generateSqlFromSchema(schema, request);
+    const { aiText, threadId: newThreadId } = await chatFlowWithAssistant(message, threadId);
 
-    res.json({ sql: sqlQuery });
+    res.json({ openai: aiText, threadId: newThreadId });
   } catch (err) {
-    console.error(err);
+    console.error("Chat error:", err);
     res.status(500).json({ error: err.message });
   }
 };
