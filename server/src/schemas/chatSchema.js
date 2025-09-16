@@ -1,3 +1,4 @@
+// server/src/schemas/chatSchema.js
 import mongoose from 'mongoose';
 const { Schema, model } = mongoose;
 

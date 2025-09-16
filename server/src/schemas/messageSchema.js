@@ -18,6 +18,11 @@ const messageSchema = new Schema(
     text: { type: String, default: '' },
     file: { type: fileSubSchema, default: undefined },
     threadId: { type: String, index: true },
+
+    // ✅ new fields
+    rows: { type: [Schema.Types.Mixed], default: undefined }, // for query results
+    edited: { type: Boolean, default: false },                // marks edited SQL
+    type: { type: String, enum: ['text', 'sql', 'result'], default: 'text' },
   },
   { timestamps: true }
 );

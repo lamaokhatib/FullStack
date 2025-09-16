@@ -1,3 +1,4 @@
+// server/src/db/mongo.js
 import mongoose from 'mongoose';
 import dotenv from 'dotenv';
 import path from 'path';

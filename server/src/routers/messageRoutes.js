@@ -1,3 +1,4 @@
+// server/src/routers/messageRoutes.js
 import express from "express";
 import Message from "../schemas/messageSchema.js";
 
