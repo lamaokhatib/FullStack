@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import cors from "cors";
 import chatRoutes from "./routers/chatRoutes.js";
 import uploadRoutes from "./routers/uploadRoutes.js";
+import queryRoutes from "./routers/queryRoutes.js";
 
 dotenv.config();
 
@@ -16,5 +17,6 @@ app.use(express.json({ limit: "2mb" }));
 // API routes
 app.use("/api", chatRoutes);
 app.use("/api", uploadRoutes);
+app.use("/api", queryRoutes);
 
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
