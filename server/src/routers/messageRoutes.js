@@ -23,4 +23,26 @@ router.get("/messages/:threadId", async (req, res) => {
   }
 });
 
+router.put("/messages/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { text } = req.body;
+
+    if (!id || !text) {
+      return res.status(400).json({ error: "id and text are required" });
+    }
+
+    const message = await Message.findByIdAndUpdate(id, { text }, { new: true });
+
+    if (!message) {
+      return res.status(404).json({ error: "Message not found" });
+    }
+
+    res.json(message);
+  } catch (err) {
+    console.error("updateMessage error:", err);
+    res.status(500).json({ error: "Failed to update message" });
+  }
+});
+
 export default router;
