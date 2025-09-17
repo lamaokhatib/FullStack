@@ -3,9 +3,38 @@ import openai from "../utils/openaiClient.js";
 import { saveMessageByThreadId } from "../utils/chatRepository.js";
 import { getDb } from "../config/dbState.js";
 import fileHandler from "../utils/fileHandler.js";
+import { generateSqlWithAI } from "./generateSqlWithAI.js";
+import { makeFile } from "./dbFileService.js"; // ← NEW: create file + keep a /download/:id handle
 
-export const chatFlowWithAssistant = async (message, existingThreadId = null) => {
+export const chatFlowWithAssistant = async (
+  message,
+  existingThreadId = null
+) => {
   if (!message?.trim()) throw new Error("Message is empty");
+
+  const looksLikeSchema = /Tables?:/i.test(message) && /-\s*\w+/.test(message);
+  const asksForDbFile =
+    /\b(build|create|generate|make)\b.*\b(database|db|file)\b/i.test(message);
+
+  if (asksForDbFile && looksLikeSchema) {
+    console.log("[AI DDL] Quick intent hit");
+    const sql = await generateSqlWithAI(message);
+
+    // choose which file to deliver
+    const { id, filename } = makeFile({
+      sql,
+      format: "sql", // or "sqlite" if you want a .sqlite DB
+      filename: "database",
+    });
+
+    return {
+      openai: `Your SQL file is ready. Click to download **${filename}**.`,
+      threadId: existingThreadId ?? null,
+      download: { url: `/api/db/download/${id}`, filename },
+    };
+  }
+
+  /* ----------------------------------------------------------- */
 
   // Reuse thread if exists
   let threadId = existingThreadId;
@@ -79,12 +108,12 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
     throw new Error(`Run failed with status: ${runStatus.status}`);
   }
 
-  // Get assistant reply
-  const messages = await openai.beta.threads.messages.list(threadId);
-  const lastAssistantMsg = messages.data.find((msg) => msg.role === "assistant");
+  // 4. Get assistant’s reply
+  const msgs = await openai.beta.threads.messages.list(threadId);
+  const lastAssistantMsg = msgs.data.find((m) => m.role === "assistant");
   const lastMsg =
     lastAssistantMsg?.content?.[0]?.text?.value ||
-    messages.data[0]?.content?.[0]?.text?.value ||
+    msgs.data[0]?.content?.[0]?.text?.value ||
     "";
 
   // Save assistant reply to DB
@@ -98,5 +127,5 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
     console.warn("Failed to save bot message:", e.message);
   }
 
-  return { aiText: lastMsg.trim(), threadId };
+  return { openai: lastMsg.trim(), threadId };
 };

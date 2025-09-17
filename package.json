@@ -18,11 +18,14 @@
   },
   "homepage": "https://github.com/lamaokhatib/FullStack#readme",
   "dependencies": {
+    "better-sqlite3": "^12.2.0",
     "cors": "^2.8.5",
     "dotenv": "^17.2.1",
     "express": "^5.1.0",
+    "mongoose": "^8.18.1",
     "multer": "^2.0.2",
     "openai": "^5.16.0",
+    "sqlite3": "^5.1.7",
     "xlsx": "^0.18.5"
   }
 }
