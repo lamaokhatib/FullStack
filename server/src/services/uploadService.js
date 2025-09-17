@@ -2,6 +2,8 @@
 import openai from "../utils/openaiClient.js";
 import fileHandler from "../utils/fileHandler.js";
 import { saveMessageByThreadId } from "../utils/chatRepository.js";
+import fs from "fs";
+import path from "path";
 
 export const processUploadAndAnalyze = async (
   filePath,
@@ -9,10 +11,8 @@ export const processUploadAndAnalyze = async (
   existingThreadId = null
 ) => {
   if (!filePath) throw new Error("No file uploaded");
-  if (!prompt?.trim()) throw new Error("Missing prompt");
-
+  
   const columns = await fileHandler(filePath);
-
   console.log("=== processUploadAndAnalyze START ===");
   console.log("Incoming params:", { filePath, prompt, existingThreadId });
 
@@ -28,6 +28,10 @@ export const processUploadAndAnalyze = async (
     console.log("Reusing existing thread:", threadId);
   }
 
+  // Read file data for storage
+  const fileBuffer = fs.readFileSync(filePath);
+  const fileStats = fs.statSync(filePath);
+
   // Add schema + prompt to OpenAI
   console.log("Adding user message to thread:", threadId);
   await openai.beta.threads.messages.create(threadId, {
@@ -35,12 +39,19 @@ export const processUploadAndAnalyze = async (
     content: `Schema: ${JSON.stringify(columns)}\nRequest: ${prompt}`,
   });
 
-  // Save user message to DB
+  // Save user message to DB with file metadata
   try {
     await saveMessageByThreadId({
       threadId,
       sender: "user",
       text: prompt,
+      file: {
+        name: path.basename(filePath),
+        path: filePath,
+        size: fileStats.size,
+        mimeType: "application/octet-stream",
+        data: fileBuffer,
+      },
       title: prompt.slice(0, 60),
     });
     console.log("Saved user message for thread:", threadId);
@@ -61,18 +72,14 @@ export const processUploadAndAnalyze = async (
   let runStatus;
   let attempts = 0;
   const maxAttempts = 30;
-
   console.log("About to poll run. threadId =", threadId, "run.id =", run.id);
-
+  
   do {
     runStatus = await openai.beta.threads.runs.retrieve(run.id, {
       thread_id: threadId,
     });
-    console.log(
-      `Polling run ${run.id} (attempt ${attempts}): status =`,
-      runStatus.status
-    );
-
+    console.log(`Polling run ${run.id} (attempt ${attempts}): status =`, runStatus.status);
+    
     if (runStatus.status === "in_progress" || runStatus.status === "queued") {
       await new Promise((r) => setTimeout(r, 1000));
       attempts++;
@@ -86,17 +93,17 @@ export const processUploadAndAnalyze = async (
     throw new Error(`Run failed with status: ${runStatus.status}`);
   }
 
-  // Get assistant’s reply
+  // Get assistant's reply
   const messages = await openai.beta.threads.messages.list(threadId);
   console.log("Messages list response:", JSON.stringify(messages, null, 2));
-
+  
   const lastAssistantMsg = messages.data.find(
     (msg) => msg.role === "assistant"
   );
-  const lastMsg =
-    lastAssistantMsg?.content?.[0]?.text?.value ||
-    messages.data[0]?.content?.[0]?.text?.value ||
-    "";
+  
+  const lastMsg = lastAssistantMsg?.content?.[0]?.text?.value || 
+                 messages.data[0]?.content?.[0]?.text?.value || 
+                 "";
 
   console.log("Assistant reply extracted:", lastMsg);
 
@@ -113,6 +120,5 @@ export const processUploadAndAnalyze = async (
   }
 
   console.log("=== processUploadAndAnalyze END ===");
-
   return { columns, aiText: lastMsg.trim(), threadId };
 };
