@@ -1,5 +1,8 @@
-// services/chatService.js
+// src/services/chatService.js
 import openai from "../utils/openaiClient.js";
+import { saveMessageByThreadId } from "../utils/chatRepository.js";
+import { getDb } from "../config/dbState.js";
+import fileHandler from "../utils/fileHandler.js";
 import { makeFile } from "./dbFileService.js"; // ← NEW: create file + keep a /download/:id handle
 
 export const chatFlowWithAssistant = async (message, existingThreadId = null) => {
@@ -25,7 +28,27 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
 
   /* ----------------------------------------------------------- */
 
-  // ✅ reuse thread if exists
+  /* ---------- NEW: quick intent → build a real file ---------- */
+  // e.g. “given data build a database file Tables: - Customers - id - ...”
+  const looksLikeSchema = /Tables?:/i.test(message) && /-\s*\w+/.test(message);
+  const asksForDbFile = /\b(build|create|generate|make)\b.*\b(database|db|file)\b/i.test(message);
+  if (asksForDbFile && looksLikeSchema) {
+  const { id, filename } = makeFile({
+    schemaText: message,   // pass the user's bullet schema
+    format: "sql",         // ← force .sql (no better-sqlite3 needed)
+    filename: "database"
+  });
+
+  return {
+    aiText: `Your SQL file is ready. Click to download **${filename}**.`,
+    threadId: existingThreadId ?? null,
+    download: { url: `/db/download/${id}`, filename }
+  };
+}
+
+  /* ----------------------------------------------------------- */
+
+  // Reuse thread if exists
   let threadId = existingThreadId;
   if (!threadId) {
     const thread = await openai.beta.threads.create();
@@ -36,20 +59,44 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
     console.log("Reusing thread:", threadId);
   }
 
-  // 1. Add user message
+  // If a DB is set, reload schema to provide context
+  let schemaPart = "";
+  const dbPath = getDb();
+  if (dbPath) {
+    try {
+      const schema = await fileHandler(dbPath);
+      schemaPart = `Schema: ${JSON.stringify(schema, null, 2)}\n\n`;
+    } catch (e) {
+      console.warn("Failed to load schema for context:", e.message);
+    }
+  }
+
+  // Add user message to OpenAI (with schema context if available)
   await openai.beta.threads.messages.create(threadId, {
     role: "user",
-    content: message,
+    content: `${schemaPart}${message}`,
   });
 
-  // 2. Run the assistant
+  // Save user message to DB
+  try {
+    await saveMessageByThreadId({
+      threadId,
+      sender: "user",
+      text: message,
+      title: message.slice(0, 60),
+    });
+  } catch (e) {
+    console.warn("Failed to save user message:", e.message);
+  }
+
+  // Run the assistant
   const run = await openai.beta.threads.runs.create(threadId, {
     assistant_id: process.env.SQL_ASSISTANT_ID,
   });
   if (!run?.id) throw new Error("Failed to create run");
   console.log("Run created:", run.id);
 
-  // 3. Poll until run completes
+  // Poll until run completes (for openai@5.16.0)
   let runStatus;
   let attempts = 0;
   const maxAttempts = 30;
@@ -78,6 +125,28 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
     lastAssistantMsg?.content?.[0]?.text?.value ||
     msgs.data[0]?.content?.[0]?.text?.value ||
     "";
+
+  // Save assistant reply to DB
+  try {
+    await saveMessageByThreadId({
+      threadId,
+      sender: "bot",
+      text: lastMsg,
+    });
+  } catch (e) {
+    console.warn("Failed to save bot message:", e.message);
+  }
+
+  // Save assistant reply to DB
+  try {
+    await saveMessageByThreadId({
+      threadId,
+      sender: "bot",
+      text: lastMsg,
+    });
+  } catch (e) {
+    console.warn("Failed to save bot message:", e.message);
+  }
 
   return { aiText: lastMsg.trim(), threadId };
 };
