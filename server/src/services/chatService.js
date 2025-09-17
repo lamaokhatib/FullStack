@@ -3,6 +3,7 @@ import openai from "../utils/openaiClient.js";
 import { saveMessageByThreadId } from "../utils/chatRepository.js";
 import { getDb } from "../config/dbState.js";
 import fileHandler from "../utils/fileHandler.js";
+import { generateSqlWithAI } from "./generateSqlWithAI.js";
 import { makeFile } from "./dbFileService.js"; // ← NEW: create file + keep a /download/:id handle
 
 export const chatFlowWithAssistant = async (
@@ -11,22 +12,25 @@ export const chatFlowWithAssistant = async (
 ) => {
   if (!message?.trim()) throw new Error("Message is empty");
 
-  /* ---------- NEW: quick intent → build a real file ---------- */
-  // e.g. “given data build a database file Tables: - Customers - id - ...”
   const looksLikeSchema = /Tables?:/i.test(message) && /-\s*\w+/.test(message);
   const asksForDbFile =
     /\b(build|create|generate|make)\b.*\b(database|db|file)\b/i.test(message);
+
   if (asksForDbFile && looksLikeSchema) {
+    console.log("[AI DDL] Quick intent hit");
+    const sql = await generateSqlWithAI(message);
+
+    // choose which file to deliver
     const { id, filename } = makeFile({
-      schemaText: message, // pass the user's bullet schema
-      format: "sql", // ← force .sql (no better-sqlite3 needed)
+      sql,
+      format: "sql", // or "sqlite" if you want a .sqlite DB
       filename: "database",
     });
 
     return {
-      aiText: `Your SQL file is ready. Click to download **${filename}**.`,
+      openai: `Your SQL file is ready. Click to download **${filename}**.`,
       threadId: existingThreadId ?? null,
-      download: { url: `/db/download/${id}`, filename },
+      download: { url: `/api/db/download/${id}`, filename },
     };
   }
 
@@ -123,5 +127,5 @@ export const chatFlowWithAssistant = async (
     console.warn("Failed to save bot message:", e.message);
   }
 
-  return { aiText: lastMsg.trim(), threadId };
+  return { openai: lastMsg.trim(), threadId };
 };

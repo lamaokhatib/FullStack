@@ -3,12 +3,10 @@ import dotenv from "dotenv";
 import cors from "cors";
 import chatRoutes from "./routers/chatRoutes.js";
 import uploadRoutes from "./routers/uploadRoutes.js";
-import queryRoutes from "./routers/queryRoutes.js"
+import queryRoutes from "./routers/queryRoutes.js";
 import messageRoutes from "./routers/messageRoutes.js";
 import { connectMongo } from "./db/mongo.js";
 import dbRouter from "./routers/db.router.js";
-
-
 
 dotenv.config();
 
@@ -23,7 +21,7 @@ app.use(express.json({ limit: "2mb" }));
 app.use("/api", chatRoutes);
 app.use("/api", uploadRoutes);
 app.use("/api", queryRoutes);
-app.use("/db", dbRouter);
+app.use("/api/db", dbRouter);
 app.use("/api", messageRoutes);
 
 // Start only after Mongo connects
