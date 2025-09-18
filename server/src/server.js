@@ -4,8 +4,9 @@ import dotenv from "dotenv";
 import cors from "cors";
 import chatRoutes from "./routers/chatRoutes.js";
 import uploadRoutes from "./routers/uploadRoutes.js";
-import queryRoutes from "./routers/queryRoutes.js";
+import queryRoutes from "./routers/queryRoutes.js";;
 import messageRoutes from "./routers/messageRoutes.js";
+import historyRoutes from "./routers/historyRoutes.js"; // ADD THIS IMPORT
 import { connectMongo } from "./db/mongo.js";
 import dbRouter from "./routers/db.router.js";
 
@@ -24,10 +25,12 @@ app.use("/api", uploadRoutes);
 app.use("/api", queryRoutes);
 app.use("/api/db", dbRouter);
 app.use("/api", messageRoutes);
+app.use("/api", historyRoutes); // ADD THIS LINE
 
 // Start only after Mongo connects
 async function start() {
   await connectMongo();
   app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
 }
+
 start();

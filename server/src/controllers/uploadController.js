@@ -1,4 +1,3 @@
-//src/controllers/uploadController.js
 import { processUploadAndAnalyze } from "../services/uploadService.js";
 import { setDb } from "../config/dbState.js";
 
@@ -10,8 +9,7 @@ export const handleFileUpload = async (req, res) => {
     const prompt = (typeof req.body?.prompt === "string" ? req.body.prompt : "").trim();
     const threadId = req.body?.threadId || null;
 
-    //Save uploaded DB path so queries can run later
-    setDb(filePath);
+    setDb(filePath); // keep schema available for queries
 
     const { columns, aiText, threadId: newThreadId } =
       await processUploadAndAnalyze(filePath, prompt, threadId);
@@ -25,8 +23,6 @@ export const handleFileUpload = async (req, res) => {
     });
   } catch (err) {
     console.error(err);
-    const msg =
-      err?.error?.message || err?.response?.data?.error?.message || err.message || "Unknown error";
-    res.status(500).json({ error: msg });
+    res.status(500).json({ error: err.message || "Unknown error" });
   }
 };
