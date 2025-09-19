@@ -4,9 +4,12 @@ import { saveMessageByThreadId } from "../utils/chatRepository.js";
 import { getDb } from "../config/dbState.js";
 import fileHandler from "../utils/fileHandler.js";
 
-export const chatFlowWithAssistant = async (message, existingThreadId = null) => {
+export const chatFlowWithAssistant = async (
+  message,
+  existingThreadId = null
+) => {
   if (!message?.trim()) throw new Error("Message is empty");
-  
+
   // Reuse thread if exists
   let threadId = existingThreadId;
   if (!threadId) {
@@ -105,7 +108,9 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
 
   // Get assistant reply
   const messages = await openai.beta.threads.messages.list(threadId);
-  const lastAssistantMsg = messages.data.find((msg) => msg.role === "assistant");
+  const lastAssistantMsg = messages.data.find(
+    (msg) => msg.role === "assistant"
+  );
   const lastMsg =
     lastAssistantMsg?.content?.[0]?.text?.value ||
     messages.data[0]?.content?.[0]?.text?.value ||
