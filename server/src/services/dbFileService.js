@@ -136,7 +136,7 @@ export function makeFile({
     console.log("[makeFile] building .sqlite DB:", tmp);
     const db = new Database(tmp);
     db.pragma("foreign_keys = ON");
-    db.exec(ddl); // ← this RUNS your SQL
+    db.exec(ddl);
     db.close();
     fileMap.set(id, { path: tmp, name: `${safe}.sqlite` });
     return { id, filename: `${safe}.sqlite` };
