@@ -4,12 +4,9 @@ import { saveMessageByThreadId } from "../utils/chatRepository.js";
 import { getDb } from "../config/dbState.js";
 import fileHandler from "../utils/fileHandler.js";
 import { generateSqlWithAI } from "./generateSqlWithAI.js";
-import { makeFile } from "./dbFileService.js";
+import { makeFile, makeJsonFile } from "./dbFileService.js"; // ✅ NEW
 
-export const chatFlowWithAssistant = async (
-  message,
-  existingThreadId = null
-) => {
+export const chatFlowWithAssistant = async (message, existingThreadId = null) => {
   if (!message?.trim()) throw new Error("Message is empty");
 
   // Reuse thread if exists
@@ -23,30 +20,62 @@ export const chatFlowWithAssistant = async (
     console.log("Reusing thread:", threadId);
   }
 
+  // ---------- simple intent checks ----------
   const looksLikeSchema = /Tables?:/i.test(message) && /-\s*\w+/.test(message);
-  const asksForDbFile =
-    /\b(build|create|generate|make)\b.*\b(database|db|file)\b/i.test(message);
+  const asksForDbFile = /\b(build|create|generate|make|give)\b.*\b(database|db|file)\b/i.test(message);
+  
+  // format hints
+ const wantsJson = /\bjson\b|\bjson\s*file\b|\bjson\s*format\b/i.test(message);
+ const wantsSqlite = /\b(sqlite|\.db)\b/i.test(message);
 
+ 
+  // default remains .sql
+
+  // ---------- fast path: user asked for a DB file from a schema ----------
   if (asksForDbFile && looksLikeSchema) {
     console.log("[AI DDL] Quick intent hit");
+
     const sql = await generateSqlWithAI(message);
 
-    // choose which file to deliver
+    // JSON export
+    if (wantsJson) { // ✅ NEW
+      const { id, filename } = makeJsonFile({ sql, filename: "database" });
+      return {
+        aiText: `Your JSON file is ready. Click to download **${filename}**.`,
+        threadId, // 🔧 CHANGED: return the real threadId
+        download: { url: `/api/db/download/${id}`, filename },
+      };
+    }
+
+    // SQLite .db export
+    if (wantsSqlite) { // ✅ NEW
+      const { id, filename } = makeFile({
+        sql,
+        format: "db", // alias for sqlite
+        filename: "database",
+      });
+      return {
+        aiText: `Your SQLite DB is ready. Click to download **${filename}**.`,
+        threadId, // 🔧 CHANGED
+        download: { url: `/api/db/download/${id}`, filename },
+      };
+    }
+
+    // default: .sql
     const { id, filename } = makeFile({
       sql,
-      format: "sql", // or "sqlite" if you want a .sqlite DB
+      format: "sql",
       filename: "database",
     });
 
     return {
       aiText: `Your SQL file is ready. Click to download **${filename}**.`,
-      threadId: existingThreadId ?? null,
+      threadId, // 🔧 CHANGED
       download: { url: `/api/db/download/${id}`, filename },
     };
   }
 
   /* ----------------------------------------------------------- */
-
   // If a DB is set, reload schema to provide context
   let schemaPart = "";
   const dbPath = getDb();
@@ -110,9 +139,7 @@ export const chatFlowWithAssistant = async (
 
   // Get assistant reply
   const messages = await openai.beta.threads.messages.list(threadId);
-  const lastAssistantMsg = messages.data.find(
-    (msg) => msg.role === "assistant"
-  );
+  const lastAssistantMsg = messages.data.find((msg) => msg.role === "assistant");
   const lastMsg =
     lastAssistantMsg?.content?.[0]?.text?.value ||
     messages.data[0]?.content?.[0]?.text?.value ||
