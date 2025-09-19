@@ -77,14 +77,15 @@ export function buildSql(schema) {
     const cols = [];
     const fks = [];
     for (const c of t.columns) {
-      cols.push(`"${c}" ${inferType(c)}`);
+      cols.push(`${c} ${inferType(c)}`);
       if (/_id$/.test(c)) {
         const target = linkTarget(c, schema);
-        if (target) fks.push(`FOREIGN KEY("${c}") REFERENCES "${target}"("id")`);
+        if (target) fks.push(`FOREIGN KEY(${c}) REFERENCES ${target}(id)`);
+
       }
     }
     out.push(
-      `CREATE TABLE IF NOT EXISTS "${t.name}" (\n  ${cols.concat(fks).join(",\n  ")}\n);`
+      `CREATE TABLE IF NOT EXISTS ${t.name} (\n  ${cols.concat(fks).join(",\n  ")}\n);`
     );
   }
   return out.join("\n\n");

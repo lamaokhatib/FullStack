@@ -29,20 +29,21 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
  const wantsSqlite = /\b(sqlite|\.db)\b/i.test(message);
 
  
-  // default remains .sql
+
 
   // ---------- fast path: user asked for a DB file from a schema ----------
   if (asksForDbFile && looksLikeSchema) {
     console.log("[AI DDL] Quick intent hit");
+     const sqlRaw = await generateSqlWithAI(message);
+  const sql = wantsSqlite ? sqlRaw : normalizeToMySQL(sqlRaw);
 
-    const sql = await generateSqlWithAI(message);
 
     // JSON export
     if (wantsJson) { // ✅ NEW
       const { id, filename } = makeJsonFile({ sql, filename: "database" });
       return {
         aiText: `Your JSON file is ready. Click to download **${filename}**.`,
-        threadId, // 🔧 CHANGED: return the real threadId
+        threadId, 
         download: { url: `/api/db/download/${id}`, filename },
       };
     }
@@ -74,6 +75,24 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
       download: { url: `/api/db/download/${id}`, filename },
     };
   }
+
+  //to make sure the generated sql actually runs in sql app ..
+  function normalizeToMySQL(sql) {
+  if (!sql) return sql;
+
+  // Drop SQLite-only pragma
+  sql = sql.replace(/^\s*PRAGMA\s+foreign_keys\s*=\s*ON\s*;\s*/gim, "");
+
+  // Replace "Identifiers" -> Identifiers
+  sql = sql.replace(/"([A-Za-z_][\w]*)"/g, "$1");
+
+
+  // Ensure semicolons at end of CREATE TABLE blocks
+  sql = sql.replace(/(\)\s*)(?!;)/g, "$1");
+
+  return sql.trim();
+}
+
 
   /* ----------------------------------------------------------- */
   // If a DB is set, reload schema to provide context
