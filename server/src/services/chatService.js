@@ -3,6 +3,8 @@ import openai from "../utils/openaiClient.js";
 import { saveMessageByThreadId } from "../utils/chatRepository.js";
 import { getDb } from "../config/dbState.js";
 import fileHandler from "../utils/fileHandler.js";
+import { generateSqlWithAI } from "./generateSqlWithAI.js";
+import { makeFile } from "./dbFileService.js";
 
 export const chatFlowWithAssistant = async (
   message,
@@ -37,7 +39,7 @@ export const chatFlowWithAssistant = async (
     });
 
     return {
-      openai: `Your SQL file is ready. Click to download **${filename}**.`,
+      aiText: `Your SQL file is ready. Click to download **${filename}**.`,
       threadId: existingThreadId ?? null,
       download: { url: `/api/db/download/${id}`, filename },
     };
