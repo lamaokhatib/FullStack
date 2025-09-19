@@ -19,7 +19,8 @@ export async function saveMessage({
   threadId,
   rows,
   edited = false,
-  type = 'text'
+  type = 'text',
+  dbFileMessageId = null,
 }) {
   if (!chatId) throw new Error('chatId is required');
   if (!sender) throw new Error('sender is required');
@@ -32,6 +33,7 @@ export async function saveMessage({
     rows,
     edited,
     type,
+    dbFileMessageId,
   });
 }
 
@@ -44,7 +46,8 @@ export async function saveMessageByThreadId({
   rows,
   title,
   edited = false,
-  type = 'text'
+  type = 'text',
+  dbFileMessageId = null,
 }) {
   const chat = await getOrCreateChat({ threadId, title });
   const msg = await saveMessage({
@@ -56,6 +59,7 @@ export async function saveMessageByThreadId({
     rows,
     edited,
     type,
+    dbFileMessageId,
   });
   return { chat, message: msg };
 }

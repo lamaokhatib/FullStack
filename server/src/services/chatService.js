@@ -3,6 +3,9 @@ import openai from "../utils/openaiClient.js";
 import { saveMessageByThreadId } from "../utils/chatRepository.js";
 import { getDb } from "../config/dbState.js";
 import fileHandler from "../utils/fileHandler.js";
+import Message from "../schemas/messageSchema.js";
+import { generateSqlWithAI } from "./generateSqlWithAI.js";
+import { makeFile } from "./dbFileService.js";
 
 export const chatFlowWithAssistant = async (
   message,
@@ -116,13 +119,44 @@ export const chatFlowWithAssistant = async (
     messages.data[0]?.content?.[0]?.text?.value ||
     "";
 
-  // Save assistant reply to DB
+  // Find the most recent file message in this thread (if any)
+  let fileMessageId = null;
+  try {
+    const lastFileMsg = await Message.findOne({
+      threadId,
+      "file.name": { $exists: true, $ne: null },
+    })
+      .sort({ createdAt: -1 })
+      .select("_id");
+    fileMessageId = lastFileMsg ? lastFileMsg._id : null;
+    console.log("Found file message for dbFileMessageId:", fileMessageId);
+  } catch (e) {
+    console.warn("Could not find file message for dbFileMessageId:", e.message);
+  }
+
+  // If no file found, try to find any file in the entire thread history
+  if (!fileMessageId) {
+    try {
+      const anyFileMsg = await Message.findOne({
+        threadId,
+        "file.name": { $exists: true, $ne: null },
+      }).select("_id");
+      fileMessageId = anyFileMsg ? anyFileMsg._id : null;
+      console.log("Found any file message in thread:", fileMessageId);
+    } catch (e) {
+      console.warn("Could not find any file message in thread:", e.message);
+    }
+  }
+
+  // Save assistant reply to DB, linking to the latest file if available
   try {
     await saveMessageByThreadId({
       threadId,
       sender: "bot",
       text: lastMsg,
+      dbFileMessageId: fileMessageId, // This links the bot response to the file
     });
+    console.log("Saved bot message with dbFileMessageId:", fileMessageId);
   } catch (e) {
     console.warn("Failed to save bot message:", e.message);
   }

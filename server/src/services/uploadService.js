@@ -40,8 +40,9 @@ export const processUploadAndAnalyze = async (
   });
 
   // Save user message to DB with file metadata
+  let fileMsg = null;
   try {
-    await saveMessageByThreadId({
+    const saved = await saveMessageByThreadId({
       threadId,
       sender: "user",
       text: prompt,
@@ -54,7 +55,8 @@ export const processUploadAndAnalyze = async (
       },
       title: prompt.slice(0, 60),
     });
-    console.log("Saved user message for thread:", threadId);
+    fileMsg = saved.message; // capture message with file
+    console.log("Saved user message with file for thread:", threadId);
   } catch (e) {
     console.warn("Failed to save user message:", e.message);
   }
@@ -113,8 +115,9 @@ export const processUploadAndAnalyze = async (
       threadId,
       sender: "bot",
       text: lastMsg,
+      dbFileMessageId: fileMsg ? fileMsg._id : null, // link to file message
     });
-    console.log("Saved assistant reply for thread:", threadId);
+    console.log("Saved assistant reply with dbFileMessageId:", fileMsg?._id);
   } catch (e) {
     console.warn("Failed to save bot message:", e.message);
   }
