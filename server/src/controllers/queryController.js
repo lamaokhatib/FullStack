@@ -134,12 +134,12 @@ export const runSqlQuery = async (req, res) => {
         {
           role: "system",
           content: `You are a SQL execution engine. 
-The user will give you:
-1) A database schema in JSON.
-2) An SQL query.
-You must return only JSON rows that would result from running the query on that schema. 
-Use realistic sample data if needed.
-Return the result as a JSON object with a "rows" array.`,
+          The user will give you:
+          1) A database schema in JSON.
+          2) An SQL query.
+          You must return only JSON rows that would result from running the query on that schema. 
+          Use realistic sample data if needed.
+          Return the result as a JSON object with a "rows" array.`,
         },
         {
           role: "user",
