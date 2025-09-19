@@ -6,11 +6,11 @@ async function createAssistant() {
     const assistant = await openai.beta.assistants.create({
       name: "SQL Generator",
       instructions: `
-You are an SQL query generator.
-Input will contain:
-1) A database schema in JSON...
-(rules here, same as your system prompt)
-`,
+        You are an SQL query generator.
+        Input will contain:
+        1) A database schema in JSON...
+        (rules here, same as your system prompt)
+        `,
       model: "gpt-4o-mini" // unified with the rest of your app
     });
 
