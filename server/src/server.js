@@ -6,9 +6,11 @@ import chatRoutes from "./routers/chatRoutes.js";
 import uploadRoutes from "./routers/uploadRoutes.js";
 import queryRoutes from "./routers/queryRoutes.js";;
 import messageRoutes from "./routers/messageRoutes.js";
-import historyRoutes from "./routers/historyRoutes.js"; // ADD THIS IMPORT
+import historyRoutes from "./routers/historyRoutes.js"; 
 import { connectMongo } from "./db/mongo.js";
 import dbRouter from "./routers/db.router.js";
+import authRoutes from "./routers/authRoutes.js";
+
 
 dotenv.config();
 
@@ -25,7 +27,8 @@ app.use("/api", uploadRoutes);
 app.use("/api", queryRoutes);
 app.use("/api/db", dbRouter);
 app.use("/api", messageRoutes);
-app.use("/api", historyRoutes); // ADD THIS LINE
+app.use("/api", historyRoutes); 
+app.use("/api/auth", authRoutes);
 
 // Start only after Mongo connects
 async function start() {

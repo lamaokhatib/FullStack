@@ -1,4 +1,4 @@
-// testThread.js
+// server/src/thread.js
 import openai from "../../server/src/utils/openaiClient.js";
 
 async function main() {

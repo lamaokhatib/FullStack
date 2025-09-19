@@ -1,3 +1,4 @@
+// server/src/utils/chatRepository.js
 import Chat from '../schemas/chatSchema.js';
 import Message from '../schemas/messageSchema.js';
 
