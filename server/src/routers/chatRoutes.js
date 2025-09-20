@@ -10,7 +10,7 @@ const router = express.Router();
 router.post("/chat/flow", chatWithSqlAssistant);
 
 // The quick result endpoint (with optional file upload)
-router.post("/chat/quick-result", uploadJson.single("file"), quickResult);
+router.post("/chat/quickresult", uploadJson.single("file"), quickResult);
 
 // List all chats
 router.get('/chats', listChats);
