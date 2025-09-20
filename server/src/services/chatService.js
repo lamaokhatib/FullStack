@@ -22,8 +22,10 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
   }
 
   // ---------- simple intent checks ----------
-  const looksLikeSchema = /Tables?:/i.test(message) && /-\s*\w+/.test(message);
-  const asksForDbFile = /\b(build|create|generate|make|give)\b.*\b(database|db|file)\b/i.test(message);
+  const looksLikeSchema = /Tables?:/i.test(message) && (/[-\w]+[:\s]+\w+/.test(message));
+  const asksForDbFile =
+    /\b(build|create|generate|make|give|produce)\b[\s\S]*\b(database|db|file|sqlite|\.db|\.sql)\b/i
+      .test(message);
   
   // format hints
   const wantsJson = /\bjson\b|\bjson\s*file\b|\bjson\s*format\b/i.test(message);
