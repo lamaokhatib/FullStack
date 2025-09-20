@@ -1,5 +1,39 @@
 // src/controllers/historyController.js
+import Chat from '../schemas/chatSchema.js';
 import Message from '../schemas/messageSchema.js';
+
+// Get all chats for the logged-in user
+export const getUserChats = async (req, res) => {
+  try {
+    const chats = await Chat.find({ userId: req.user._id }).sort({
+      createdAt: -1,
+    });
+    res.json(chats);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+// Get all messages for a specific chat, verifying user ownership
+export const getChatMessages = async (req, res) => {
+  try {
+    const { chatId } = req.params;
+
+    // First, verify this chat belongs to the user
+    const chat = await Chat.findOne({ _id: chatId, userId: req.user._id });
+    if (!chat) {
+      return res.status(404).json({ error: "Chat not found or access denied" });
+    }
+
+    // If ownership is confirmed, fetch messages
+    const messages = await Message.find({ chat: chatId }).sort({
+      createdAt: "asc",
+    });
+    res.json(messages);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
 
 // Get all uploaded files from message history
 export const getUploadHistory = async (req, res) => {

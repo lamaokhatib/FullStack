@@ -14,6 +14,7 @@ export const quickResult = async (req, res) => {
     });
 
     const prompt = req.body?.prompt?.trim();
+    const userId = req.body?.userId || "anonymous";
     if (!prompt) return res.status(400).json({ error: "Prompt required" });
 
     let threadId = req.body?.threadId || null;
@@ -26,7 +27,8 @@ export const quickResult = async (req, res) => {
         req.file.path,
         prompt,
         threadId,
-        true 
+        true,
+        userId
       );
 
       threadId = result.threadId;
@@ -49,7 +51,7 @@ export const quickResult = async (req, res) => {
       console.log("Saving user message to DB (no file)");
       savedUser = await saveMessageByThreadId({
         threadId,
-        sender: "user",
+        sender: userId,
         text: prompt,
         title: prompt.slice(0, 60),
       });

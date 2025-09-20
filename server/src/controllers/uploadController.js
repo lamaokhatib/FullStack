@@ -8,11 +8,12 @@ export const handleFileUpload = async (req, res) => {
     const { path: filePath, originalname } = req.file;
     const prompt = (typeof req.body?.prompt === "string" ? req.body.prompt : "").trim();
     const threadId = req.body?.threadId || null;
+    const userId = req.body?.userId || "anonymous"; // CHANGE: Added userId extraction
 
     setDb(filePath); // keep schema available for queries
 
     const { columns, aiText, threadId: newThreadId } =
-      await processUploadAndAnalyze(filePath, prompt, threadId);
+      await processUploadAndAnalyze(filePath, prompt, threadId, false, userId); // CHANGE: Added userId parameter
 
     res.json({
       message: "File uploaded and analyzed successfully",

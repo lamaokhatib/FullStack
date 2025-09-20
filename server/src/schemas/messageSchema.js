@@ -16,7 +16,7 @@ const fileSubSchema = new Schema(
 const messageSchema = new Schema(
   {
     chat: { type: Schema.Types.ObjectId, ref: 'Chat', required: true, index: true },
-    sender: { type: String, enum: ['user', 'bot'], required: true },
+    sender: { type: String, required: true },
     text: { type: String, default: '' },
     file: { type: fileSubSchema, default: undefined },
     threadId: { type: String, index: true },

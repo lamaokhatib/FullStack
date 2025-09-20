@@ -7,8 +7,13 @@ import Message from "../schemas/messageSchema.js";
 import { generateSqlWithAI } from "./generateSqlWithAI.js";
 import { makeFile, makeJsonFile } from "./dbFileService.js"; 
 
-export const chatFlowWithAssistant = async (message, existingThreadId = null) => {
+export const chatFlowWithAssistant = async (message, existingThreadId = null, userId) => {
   if (!message?.trim()) throw new Error("Message is empty");
+
+  // Ensure userId is not "anonymous" or an object, but a valid ID string
+  if (!userId || typeof userId !== 'string') {
+    throw new Error("A valid user ID is required.");
+  }
 
   // Reuse thread if exists
   let threadId = existingThreadId;
@@ -22,10 +27,8 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
   }
 
   // ---------- simple intent checks ----------
-  const looksLikeSchema = /Tables?:/i.test(message) && (/[-\w]+[:\s]+\w+/.test(message));
-  const asksForDbFile =
-    /\b(build|create|generate|make|give|produce)\b[\s\S]*\b(database|db|file|sqlite|\.db|\.sql)\b/i
-      .test(message);
+  const looksLikeSchema = /Tables?:/i.test(message) && /-\s*\w+/.test(message);
+  const asksForDbFile = /\b(build|create|generate|make|give)\b.*\b(database|db|file)\b/i.test(message);
   
   // format hints
   const wantsJson = /\bjson\b|\bjson\s*file\b|\bjson\s*format\b/i.test(message);
@@ -40,7 +43,7 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
     try {
       await saveMessageByThreadId({
         threadId,
-        sender: "user",
+        sender: userId,
         text: message,
         title: message.slice(0, 60),
       });
@@ -113,7 +116,7 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
 
     return {
       aiText: botTextForDownload(filename),
-      threadId, // CHANGED
+      threadId,
       download: { url: `/api/db/download/${id}`, filename },
     };
   }
@@ -157,7 +160,7 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
   try {
     await saveMessageByThreadId({
       threadId,
-      sender: "user",
+      sender: userId,
       text: message,
       title: message.slice(0, 60),
     });

@@ -8,13 +8,14 @@ export const processUploadAndAnalyze = async (
   filePath,
   prompt,
   existingThreadId = null,
-  silent = false
+  silent = false,
+  userId = "anonymous"
 ) => {
   if (!filePath) throw new Error("No file uploaded");
 
   const columns = await fileHandler(filePath);
   console.log("=== processUploadAndAnalyze START ===");
-  console.log("Incoming params:", { filePath, prompt, existingThreadId, silent });
+  console.log("Incoming params:", { filePath, prompt, existingThreadId, silent, userId });
 
   // reuse thread if exists
   let threadId = existingThreadId;
@@ -44,7 +45,7 @@ export const processUploadAndAnalyze = async (
   try {
     const saved = await saveMessageByThreadId({
       threadId,
-      sender: "user",
+      sender: userId,
       text: prompt,
       file: {
         name: path.basename(filePath),
@@ -128,7 +129,7 @@ export const processUploadAndAnalyze = async (
     console.log("=== processUploadAndAnalyze END ===");
     return { columns, aiText: lastMsg.trim(), threadId, fileMsg };
   } else {
-    // ⚡ Silent mode → Skip assistant reply
+    // Silent mode → Skip assistant reply
     console.log("Silent mode: skipping assistant SQL generation");
     console.log("=== processUploadAndAnalyze END (silent) ===");
     return { columns, aiText: "", threadId, fileMsg };
