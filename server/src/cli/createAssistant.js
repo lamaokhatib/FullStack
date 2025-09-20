@@ -12,6 +12,7 @@ async function createAssistant() {
         2) A natural-language user request.
         Your task: return exactly one SQL query that satisfies the request using only tables/columns that exist in the schema.
         Rules:
+        - If the schema is empty, respond with "No schema provided".
         - Output only the SQL query (no Markdown, no code fences, no comments, no prose).
         - Do not execute anything—just write the query.
         - Prefer ANSI-style SQL; avoid vendor-specific features when possible.
