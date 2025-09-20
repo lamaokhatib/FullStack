@@ -26,52 +26,91 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
   const asksForDbFile = /\b(build|create|generate|make|give)\b.*\b(database|db|file)\b/i.test(message);
   
   // format hints
- const wantsJson = /\bjson\b|\bjson\s*file\b|\bjson\s*format\b/i.test(message);
- const wantsSqlite = /\b(sqlite|\.db)\b/i.test(message);
-
- 
-
+  const wantsJson = /\bjson\b|\bjson\s*file\b|\bjson\s*format\b/i.test(message);
+  const wantsSqlite = /\b(sqlite|\.db)\b/i.test(message);
 
   // ---------- fast path: user asked for a DB file from a schema ----------
   if (asksForDbFile && looksLikeSchema) {
     console.log("[AI DDL] Quick intent hit");
-     const sqlRaw = await generateSqlWithAI(message);
-  const sql = wantsSqlite ? sqlRaw : normalizeToMySQL(sqlRaw);
+    const sqlRaw = await generateSqlWithAI(message);
+    const sql = wantsSqlite ? sqlRaw : normalizeToMySQL(sqlRaw);
 
+    try {
+      await saveMessageByThreadId({
+        threadId,
+        sender: "user",
+        text: message,
+        title: message.slice(0, 60),
+      });
+    } catch (e) {
+      console.warn("Failed to save user message (DDL fast path):", e.message);
+    }
 
-    // JSON export
+    const botTextForDownload = (filename) =>
+      `Your ${wantsJson ? "JSON" : wantsSqlite ? "SQLite DB" : "SQL"} file is ready. Click to download **${filename}**.`;
+
     if (wantsJson) {
       const { id, filename } = makeJsonFile({ sql, filename: "database" });
+
+      try {
+        await saveMessageByThreadId({
+          threadId,
+          sender: "bot",
+          text: botTextForDownload(filename),
+        });
+      } catch (e) {
+        console.warn("Failed to save bot message (DDL fast path, json):", e.message);
+      }
+
       return {
-        aiText: `Your JSON file is ready. Click to download **${filename}**.`,
+        aiText: botTextForDownload(filename),
         threadId, 
         download: { url: `/api/db/download/${id}`, filename },
       };
     }
 
-    // SQLite .db export
     if (wantsSqlite) {
       const { id, filename } = makeFile({
         sql,
         format: "db", // alias for sqlite
         filename: "database",
       });
+
+      try {
+        await saveMessageByThreadId({
+          threadId,
+          sender: "bot",
+          text: botTextForDownload(filename),
+        });
+      } catch (e) {
+        console.warn("Failed to save bot message (DDL fast path, sqlite):", e.message);
+      }
+
       return {
-        aiText: `Your SQLite DB is ready. Click to download **${filename}**.`,
+        aiText: botTextForDownload(filename),
         threadId,
         download: { url: `/api/db/download/${id}`, filename },
       };
     }
 
-    // default: .sql
     const { id, filename } = makeFile({
       sql,
       format: "sql",
       filename: "database",
     });
 
+    try {
+      await saveMessageByThreadId({
+        threadId,
+        sender: "bot",
+        text: botTextForDownload(filename),
+      });
+    } catch (e) {
+      console.warn("Failed to save bot message (DDL fast path, sql):", e.message);
+    }
+
     return {
-      aiText: `Your SQL file is ready. Click to download **${filename}**.`,
+      aiText: botTextForDownload(filename),
       threadId, // CHANGED
       download: { url: `/api/db/download/${id}`, filename },
     };
@@ -79,21 +118,19 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
 
   //to make sure the generated sql actually runs in sql app ..
   function normalizeToMySQL(sql) {
-  if (!sql) return sql;
+    if (!sql) return sql;
 
-  // Drop SQLite-only pragma
-  sql = sql.replace(/^\s*PRAGMA\s+foreign_keys\s*=\s*ON\s*;\s*/gim, "");
+    // Drop SQLite-only pragma
+    sql = sql.replace(/^\s*PRAGMA\s+foreign_keys\s*=\s*ON\s*;\s*/gim, "");
 
-  // Replace "Identifiers" -> Identifiers
-  sql = sql.replace(/"([A-Za-z_][\w]*)"/g, "$1");
+    // Replace "Identifiers" -> Identifiers
+    sql = sql.replace(/"([A-Za-z_][\w]*)"/g, "$1");
 
+    // Ensure semicolons at end of CREATE TABLE blocks
+    sql = sql.replace(/(\)\s*)(?!;)/g, "$1");
 
-  // Ensure semicolons at end of CREATE TABLE blocks
-  sql = sql.replace(/(\)\s*)(?!;)/g, "$1");
-
-  return sql.trim();
-}
-
+    return sql.trim();
+  }
 
   /* ----------------------------------------------------------- */
   // If a DB is set, reload schema to provide context
