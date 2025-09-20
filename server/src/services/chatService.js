@@ -5,8 +5,6 @@ import { getDb } from "../config/dbState.js";
 import fileHandler from "../utils/fileHandler.js";
 import Message from "../schemas/messageSchema.js";
 import { generateSqlWithAI } from "./generateSqlWithAI.js";
-import { makeFile } from "./dbFileService.js";
-import { generateSqlWithAI } from "./generateSqlWithAI.js";
 import { makeFile, makeJsonFile } from "./dbFileService.js"; 
 
 export const chatFlowWithAssistant = async (message, existingThreadId = null) => {
