@@ -6,11 +6,10 @@ import fileHandler from "../utils/fileHandler.js";
 import Message from "../schemas/messageSchema.js";
 import { generateSqlWithAI } from "./generateSqlWithAI.js";
 import { makeFile } from "./dbFileService.js";
+import { generateSqlWithAI } from "./generateSqlWithAI.js";
+import { makeFile, makeJsonFile } from "./dbFileService.js"; 
 
-export const chatFlowWithAssistant = async (
-  message,
-  existingThreadId = null
-) => {
+export const chatFlowWithAssistant = async (message, existingThreadId = null) => {
   if (!message?.trim()) throw new Error("Message is empty");
 
   // Reuse thread if exists
@@ -24,30 +23,81 @@ export const chatFlowWithAssistant = async (
     console.log("Reusing thread:", threadId);
   }
 
+  // ---------- simple intent checks ----------
   const looksLikeSchema = /Tables?:/i.test(message) && /-\s*\w+/.test(message);
-  const asksForDbFile =
-    /\b(build|create|generate|make)\b.*\b(database|db|file)\b/i.test(message);
+  const asksForDbFile = /\b(build|create|generate|make|give)\b.*\b(database|db|file)\b/i.test(message);
+  
+  // format hints
+ const wantsJson = /\bjson\b|\bjson\s*file\b|\bjson\s*format\b/i.test(message);
+ const wantsSqlite = /\b(sqlite|\.db)\b/i.test(message);
 
+ 
+
+
+  // ---------- fast path: user asked for a DB file from a schema ----------
   if (asksForDbFile && looksLikeSchema) {
     console.log("[AI DDL] Quick intent hit");
-    const sql = await generateSqlWithAI(message);
+     const sqlRaw = await generateSqlWithAI(message);
+  const sql = wantsSqlite ? sqlRaw : normalizeToMySQL(sqlRaw);
 
-    // choose which file to deliver
+
+    // JSON export
+    if (wantsJson) { // ✅ NEW
+      const { id, filename } = makeJsonFile({ sql, filename: "database" });
+      return {
+        aiText: `Your JSON file is ready. Click to download **${filename}**.`,
+        threadId, 
+        download: { url: `/api/db/download/${id}`, filename },
+      };
+    }
+
+    // SQLite .db export
+    if (wantsSqlite) { // ✅ NEW
+      const { id, filename } = makeFile({
+        sql,
+        format: "db", // alias for sqlite
+        filename: "database",
+      });
+      return {
+        aiText: `Your SQLite DB is ready. Click to download **${filename}**.`,
+        threadId, // 🔧 CHANGED
+        download: { url: `/api/db/download/${id}`, filename },
+      };
+    }
+
+    // default: .sql
     const { id, filename } = makeFile({
       sql,
-      format: "sql", // or "sqlite" if you want a .sqlite DB
+      format: "sql",
       filename: "database",
     });
 
     return {
-      openai: `Your SQL file is ready. Click to download **${filename}**.`,
-      threadId: existingThreadId ?? null,
+      aiText: `Your SQL file is ready. Click to download **${filename}**.`,
+      threadId, // 🔧 CHANGED
       download: { url: `/api/db/download/${id}`, filename },
     };
   }
 
-  /* ----------------------------------------------------------- */
+  //to make sure the generated sql actually runs in sql app ..
+  function normalizeToMySQL(sql) {
+  if (!sql) return sql;
 
+  // Drop SQLite-only pragma
+  sql = sql.replace(/^\s*PRAGMA\s+foreign_keys\s*=\s*ON\s*;\s*/gim, "");
+
+  // Replace "Identifiers" -> Identifiers
+  sql = sql.replace(/"([A-Za-z_][\w]*)"/g, "$1");
+
+
+  // Ensure semicolons at end of CREATE TABLE blocks
+  sql = sql.replace(/(\)\s*)(?!;)/g, "$1");
+
+  return sql.trim();
+}
+
+
+  /* ----------------------------------------------------------- */
   // If a DB is set, reload schema to provide context
   let schemaPart = "";
   const dbPath = getDb();
@@ -111,9 +161,7 @@ export const chatFlowWithAssistant = async (
 
   // Get assistant reply
   const messages = await openai.beta.threads.messages.list(threadId);
-  const lastAssistantMsg = messages.data.find(
-    (msg) => msg.role === "assistant"
-  );
+  const lastAssistantMsg = messages.data.find((msg) => msg.role === "assistant");
   const lastMsg =
     lastAssistantMsg?.content?.[0]?.text?.value ||
     messages.data[0]?.content?.[0]?.text?.value ||
