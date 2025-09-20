@@ -42,7 +42,7 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
 
 
     // JSON export
-    if (wantsJson) { // ✅ NEW
+    if (wantsJson) {
       const { id, filename } = makeJsonFile({ sql, filename: "database" });
       return {
         aiText: `Your JSON file is ready. Click to download **${filename}**.`,
@@ -52,7 +52,7 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
     }
 
     // SQLite .db export
-    if (wantsSqlite) { // ✅ NEW
+    if (wantsSqlite) {
       const { id, filename } = makeFile({
         sql,
         format: "db", // alias for sqlite
@@ -60,7 +60,7 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
       });
       return {
         aiText: `Your SQLite DB is ready. Click to download **${filename}**.`,
-        threadId, // 🔧 CHANGED
+        threadId,
         download: { url: `/api/db/download/${id}`, filename },
       };
     }
@@ -74,7 +74,7 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null) =>
 
     return {
       aiText: `Your SQL file is ready. Click to download **${filename}**.`,
-      threadId, // 🔧 CHANGED
+      threadId, // CHANGED
       download: { url: `/api/db/download/${id}`, filename },
     };
   }

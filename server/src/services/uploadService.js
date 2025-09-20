@@ -8,7 +8,7 @@ export const processUploadAndAnalyze = async (
   filePath,
   prompt,
   existingThreadId = null,
-  silent = false // 👈 new flag
+  silent = false
 ) => {
   if (!filePath) throw new Error("No file uploaded");
 
@@ -62,7 +62,7 @@ export const processUploadAndAnalyze = async (
   }
 
   if (!silent) {
-    // 🔎 Normal mode → Run the assistant and save its SQL reply
+    // Normal mode → Run the assistant and save its SQL reply
     console.log("Creating run for assistant:", process.env.SQL_ASSISTANT_ID);
     const run = await openai.beta.threads.runs.create(threadId, {
       assistant_id: process.env.SQL_ASSISTANT_ID,
@@ -129,7 +129,7 @@ export const processUploadAndAnalyze = async (
     return { columns, aiText: lastMsg.trim(), threadId, fileMsg };
   } else {
     // ⚡ Silent mode → Skip assistant reply
-    console.log("⚡ Silent mode: skipping assistant SQL generation");
+    console.log("Silent mode: skipping assistant SQL generation");
     console.log("=== processUploadAndAnalyze END (silent) ===");
     return { columns, aiText: "", threadId, fileMsg };
   }

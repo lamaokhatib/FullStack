@@ -8,7 +8,7 @@ import openai from "../utils/openaiClient.js";
 
 export const quickResult = async (req, res) => {
   try {
-    console.log("🔥 QuickResult called:", {
+    console.log("QuickResult called:", {
       prompt: req.body?.prompt,
       threadId: req.body?.threadId,
     });
@@ -26,7 +26,7 @@ export const quickResult = async (req, res) => {
         req.file.path,
         prompt,
         threadId,
-        true // 👈 silent mode: don’t auto-save assistant reply
+        true 
       );
 
       threadId = result.threadId;
@@ -36,34 +36,34 @@ export const quickResult = async (req, res) => {
       // Set DB for schema + query execution
       setDb(req.file.path);
 
-      console.log("✅ File processed, threadId set to:", threadId);
+      console.log("File processed, threadId set to:", threadId);
     } else {
       // No file → ensure a thread exists
       if (!threadId) {
         const thread = await openai.beta.threads.create();
         threadId = thread.id;
-        console.log("✅ New thread created:", threadId);
+        console.log("New thread created:", threadId);
       }
 
       // Save user message manually (only once here)
-      console.log("💾 Saving user message to DB (no file)");
+      console.log("Saving user message to DB (no file)");
       savedUser = await saveMessageByThreadId({
         threadId,
         sender: "user",
         text: prompt,
         title: prompt.slice(0, 60),
       });
-      console.log("✅ User message saved with ID:", savedUser.message._id);
+      console.log("User message saved with ID:", savedUser.message._id);
     }
 
     // Load schema
-    console.log("📊 Loading schema from DB:", getDb());
+    console.log("Loading schema from DB:", getDb());
     const dbPath = getDb();
     const schema = await fileHandler(dbPath);
-    console.log("✅ Schema loaded:", Object.keys(schema));
+    console.log("Schema loaded:", Object.keys(schema));
 
     // Generate SQL with AI
-    console.log("🤖 Asking OpenAI to generate SQL for prompt");
+    console.log("Asking OpenAI to generate SQL for prompt");
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
@@ -75,10 +75,10 @@ export const quickResult = async (req, res) => {
       ],
     });
     const sql = completion.choices[0].message.content.trim();
-    console.log("✅ Generated SQL:", sql);
+    console.log("Generated SQL:", sql);
 
     // Run SQL immediately
-    console.log("▶️ Running generated SQL");
+    console.log("Running generated SQL");
     let queryResult;
     await runSqlQuery(
       { body: { query: sql, threadId, messageId: savedUser?.message?._id } },
@@ -97,10 +97,10 @@ export const quickResult = async (req, res) => {
     );
 
     if (!queryResult?.rows) throw new Error("No rows returned");
-    console.log("✅ runSqlQuery returned rows:", queryResult.rows.length);
+    console.log("runSqlQuery returned rows:", queryResult.rows.length);
 
     // Save bot result message
-    console.log("💾 Saving bot result message with rows:", queryResult.rows.length);
+    console.log("Saving bot result message with rows:", queryResult.rows.length);
     const savedBot = await saveMessageByThreadId({
       threadId,
       sender: "bot",
@@ -108,11 +108,11 @@ export const quickResult = async (req, res) => {
       type: "result",
       dbFileMessageId: fileMsg ? fileMsg._id : null,
     });
-    console.log("✅ Bot result message saved");
+    console.log("Bot result message saved");
 
     // Respond to frontend
     console.log(
-      "📤 Sending response back to frontend with",
+      "Sending response back to frontend with",
       queryResult.rows.length,
       "rows"
     );

@@ -21,8 +21,8 @@ async function uploadFile(filePath, prompt = "") {
 
     if (data.threadId) threadId = data.threadId;
 
-    console.log("✅ File uploaded:", data.file);
-    console.log("📊 Columns detected:", JSON.stringify(data.columns, null, 2));
+    console.log("File uploaded:", data.file);
+    console.log("Columns detected:", JSON.stringify(data.columns, null, 2));
     if (data.openai) console.log("Bot>", data.openai);
   } catch (err) {
     console.error("Upload error:", err.message);
@@ -54,7 +54,7 @@ const rl = readline.createInterface({
   prompt: "You> ",
 });
 
-console.log("💬 Terminal Chat Interface");
+console.log("Terminal Chat Interface");
 console.log("Commands:");
 console.log("  /upload <path> [prompt]   Upload a file (CSV, JSON, DB, SQL)");
 console.log("  /exit                     Quit\n");
@@ -76,7 +76,7 @@ rl.on("line", async (line) => {
     const filePath = parts[1];
     const prompt = parts.slice(2).join(" ");
     if (!fs.existsSync(filePath)) {
-      console.log("❌ File not found:", filePath);
+      console.log("File not found:", filePath);
     } else {
       await uploadFile(filePath, prompt);
     }

@@ -35,12 +35,12 @@ export const runSqlQuery = async (req, res) => {
           setDb(tmpPath);
           dbPath = tmpPath;
           foundVia = "explicit_dbFileMessageId";
-          console.log("✅ Strategy 1 SUCCESS: Using DB file from explicit dbFileMessageId:", tmpPath);
+          console.log("Strategy 1 SUCCESS: Using DB file from explicit dbFileMessageId:", tmpPath);
         } else {
-          console.log("❌ Strategy 1 FAILED: File message found but no file data");
+          console.log("Strategy 1 FAILED: File message found but no file data");
         }
       } catch (err) {
-        console.log("❌ Strategy 1 ERROR:", err.message);
+        console.log("Strategy 1 ERROR:", err.message);
       }
     }
 
@@ -61,15 +61,15 @@ export const runSqlQuery = async (req, res) => {
             setDb(tmpPath);
             dbPath = tmpPath;
             foundVia = "message_dbFileMessageId";
-            console.log("✅ Strategy 2 SUCCESS: Using DB file from message's dbFileMessageId:", tmpPath);
+            console.log("Strategy 2 SUCCESS: Using DB file from message's dbFileMessageId:", tmpPath);
           } else {
-            console.log("❌ Strategy 2 FAILED: File message found but no file data");
+            console.log("Strategy 2 FAILED: File message found but no file data");
           }
         } else {
-          console.log("❌ Strategy 2 FAILED: Message has no dbFileMessageId");
+          console.log("Strategy 2 FAILED: Message has no dbFileMessageId");
         }
       } catch (err) {
-        console.log("❌ Strategy 2 ERROR:", err.message);
+        console.log("Strategy 2 ERROR:", err.message);
       }
     }
 
@@ -91,12 +91,12 @@ export const runSqlQuery = async (req, res) => {
           setDb(tmpPath);
           dbPath = tmpPath;
           foundVia = "thread_search";
-          console.log("✅ Strategy 3 SUCCESS: Using DB file from thread search:", tmpPath);
+          console.log("Strategy 3 SUCCESS: Using DB file from thread search:", tmpPath);
         } else {
-          console.log("❌ Strategy 3 FAILED: No file messages found in thread");
+          console.log("Strategy 3 FAILED: No file messages found in thread");
         }
       } catch (err) {
-        console.log("❌ Strategy 3 ERROR:", err.message);
+        console.log("Strategy 3 ERROR:", err.message);
       }
     }
 
@@ -106,9 +106,9 @@ export const runSqlQuery = async (req, res) => {
       if (globalPath && fs.existsSync(globalPath)) {
         dbPath = globalPath;
         foundVia = "global_fallback";
-        console.log("✅ Strategy 4 SUCCESS: Using global DB path:", dbPath);
+        console.log("Strategy 4 SUCCESS: Using global DB path:", dbPath);
       } else {
-        console.log("❌ All strategies failed - no database context found");
+        console.log("All strategies failed - no database context found");
         return res.status(400).json({ 
           error: "No database file found. Please upload a database file first.",
           debug: {
@@ -121,7 +121,7 @@ export const runSqlQuery = async (req, res) => {
       }
     }
 
-    console.log(`🎯 Final result: Using DB found via ${foundVia}: ${dbPath}`);
+    console.log(`Final result: Using DB found via ${foundVia}: ${dbPath}`);
 
     // Load schema
     const schema = await fileHandler(dbPath);
