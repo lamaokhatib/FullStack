@@ -34,13 +34,22 @@ export const chatWithSqlAssistant = async (req, res) => {
       return res.status(400).json({ error: "Message is required" });
     }
 
-    // pass userId so new chats get owned by that user
-    const result = await chatFlowWithAssistant(message, threadId, userId);
+    // allow the service to return { aiText, threadId, download? }
+    const result = await chatFlowWithAssistant(message, threadId);
+
+    // ensure absolute URL for download (so the anchor works in the browser)
+    let download = result.download || null;
+    if (download?.url && download.url.startsWith("/")) {
+      download = {
+        ...download,
+        url: `${req.protocol}://${req.get("host")}${download.url}`,
+      };
+    }
 
     return res.json({
       openai: result.aiText ?? null,
       threadId: result.threadId ?? threadId ?? null,
-      ...(result.download ? { download: result.download } : {})
+      ...(download ? { download } : {}),
     });
   } catch (err) {
     console.error("Chat error:", err);

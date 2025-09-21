@@ -23,8 +23,10 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null, us
   }
 
   // ---------- simple intent checks ----------
-  const looksLikeSchema = /Tables?:/i.test(message) && /-\s*\w+/.test(message);
-  const asksForDbFile = /\b(build|create|generate|make|give)\b.*\b(database|db|file)\b/i.test(message);
+  const looksLikeSchema = /Tables?:/i.test(message) && (/[-\w]+[:\s]+\w+/.test(message));
+  const asksForDbFile =
+    /\b(build|create|generate|make|give|produce)\b[\s\S]*\b(database|db|file|sqlite|\.db|\.sql)\b/i
+      .test(message);
   
   // format hints
   const wantsJson = /\bjson\b|\bjson\s*file\b|\bjson\s*format\b/i.test(message);
@@ -32,27 +34,42 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null, us
 
   // ---------- fast path: user asked for a DB file from a schema ----------
   if (asksForDbFile && looksLikeSchema) {
+    console.log("[AI DDL] Quick intent hit");
     const sqlRaw = await generateSqlWithAI(message);
     const sql = wantsSqlite ? sqlRaw : normalizeToMySQL(sqlRaw);
 
-    // Save user message and stamp chat owner (if provided)
-    await saveMessageByThreadId({
-      threadId,
-      userId,
-      sender: "user",
-      text: message,
-      title: message.slice(0, 60),
-    });
+    try {
+      await saveMessageByThreadId({
+        threadId,
+        sender: "user",
+        text: message,
+        title: message.slice(0, 60),
+      });
+    } catch (e) {
+      console.warn("Failed to save user message (DDL fast path):", e.message);
+    }
 
     const botTextForDownload = (filename) =>
       `Your ${wantsJson ? "JSON" : wantsSqlite ? "SQLite DB" : "SQL"} file is ready. Click to download **${filename}**.`;
 
     if (wantsJson) {
       const { id, filename } = makeJsonFile({ sql, filename: "database" });
-      await saveMessageByThreadId({
-        threadId, userId, sender: "bot", text: botTextForDownload(filename)
-      });
-      return { aiText: botTextForDownload(filename), threadId, download: { url: `/api/db/download/${id}`, filename } };
+
+      try {
+        await saveMessageByThreadId({
+          threadId,
+          sender: "bot",
+          text: botTextForDownload(filename),
+        });
+      } catch (e) {
+        console.warn("Failed to save bot message (DDL fast path, json):", e.message);
+      }
+
+      return {
+        aiText: botTextForDownload(filename),
+        threadId, 
+        download: { url: `/api/db/download/${id}`, filename },
+      };
     }
 
     if (wantsSqlite) {
@@ -60,14 +77,45 @@ export const chatFlowWithAssistant = async (message, existingThreadId = null, us
       await saveMessageByThreadId({
         threadId, userId, sender: "bot", text: botTextForDownload(filename)
       });
-      return { aiText: botTextForDownload(filename), threadId, download: { url: `/api/db/download/${id}`, filename } };
+
+      try {
+        await saveMessageByThreadId({
+          threadId,
+          sender: "bot",
+          text: botTextForDownload(filename),
+        });
+      } catch (e) {
+        console.warn("Failed to save bot message (DDL fast path, sqlite):", e.message);
+      }
+
+      return {
+        aiText: botTextForDownload(filename),
+        threadId,
+        download: { url: `/api/db/download/${id}`, filename },
+      };
     }
 
-    const { id, filename } = makeFile({ sql, format: "sql", filename: "database" });
-    await saveMessageByThreadId({
-      threadId, userId, sender: "bot", text: botTextForDownload(filename)
+    const { id, filename } = makeFile({
+      sql,
+      format: "sql",
+      filename: "database",
     });
-    return { aiText: botTextForDownload(filename), threadId, download: { url: `/api/db/download/${id}`, filename } };
+
+    try {
+      await saveMessageByThreadId({
+        threadId,
+        sender: "bot",
+        text: botTextForDownload(filename),
+      });
+    } catch (e) {
+      console.warn("Failed to save bot message (DDL fast path, sql):", e.message);
+    }
+
+    return {
+      aiText: botTextForDownload(filename),
+      threadId, // CHANGED
+      download: { url: `/api/db/download/${id}`, filename },
+    };
   }
 
   // to make sure the generated sql actually runs in sql app ..
