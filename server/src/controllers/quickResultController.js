@@ -1,10 +1,17 @@
+// server/src/controllers/quickResultController.js
+
+
 import { processUploadAndAnalyze } from "../services/uploadService.js";
-import { runSqlQuery } from "./queryController.js";
+import { runSqlQuery } from "./queryController.js"; // same folder, keep "./"
 import { saveMessageByThreadId } from "../utils/chatRepository.js";
 import { getDb, setDb } from "../config/dbState.js";
 import fileHandler from "../utils/fileHandler.js";
 import openai from "../utils/openaiClient.js";
 
+
+import fs from "fs";
+
+// (keep) Generate a quick result from prompt (+ optional file)
 export const quickResult = async (req, res) => {
   try {
     const prompt = req.body?.prompt?.trim();
@@ -15,7 +22,7 @@ export const quickResult = async (req, res) => {
     let fileMsg = null;
     let savedUser = null;
 
-    // If a file is uploaded → process it silently
+    // (keep) If a file is uploaded → process it silently
     if (req.file) {
       const result = await processUploadAndAnalyze(
         req.file.path,
@@ -29,16 +36,16 @@ export const quickResult = async (req, res) => {
       fileMsg = result.fileMsg;
       savedUser = result.userMessage || null;
 
-      // Set DB for schema + query execution
+      // (keep) Set DB for schema + query execution
       setDb(req.file.path);
     } else {
-      // No file → ensure a thread exists
+      // (keep) No file → ensure a thread exists
       if (!threadId) {
         const thread = await openai.beta.threads.create();
         threadId = thread.id;
       }
 
-      // Save user message (stamps chat owner)
+      // (keep) Save user message (stamps chat owner)
       savedUser = await saveMessageByThreadId({
         threadId,
         userId,  // 👈
@@ -48,15 +55,24 @@ export const quickResult = async (req, res) => {
       });
     }
 
-    // Load schema
+    // (keep) Load schema
     const dbPath = getDb();
+
+    // ADDED: require a real DB file to be present; avoids falling into any AI fallback deeper down
+    if (!dbPath || !fs.existsSync(dbPath)) {
+      return res.status(400).json({
+        error: "No database loaded. Upload a .db/.sqlite/.sql/.json/.csv file before using Quick Result.",
+      });
+    }
+
     const schema = await fileHandler(dbPath);
 
-    // Generate SQL with AI
+    // (keep) Generate SQL with AI — but restrict to a runnable SELECT/WITH
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        { role: "system", content: "Generate only a SQL query string, nothing else." },
+        // CHANGED: make the model return only a valid SQLite SELECT/WITH query
+        { role: "system", content: "Generate only a valid SQLite SELECT or WITH query that runs on the provided schema. No DDL/DML/PRAGMA. No explanations. Return only the raw SQL." },
         {
           role: "user",
           content: `Schema: ${JSON.stringify(schema)}\n\nRequest: ${prompt}`,
@@ -65,19 +81,37 @@ export const quickResult = async (req, res) => {
     });
     const sql = completion.choices[0].message.content.trim();
 
-    // Run SQL immediately
+    // (keep) Run SQL immediately
     let queryResult;
     await runSqlQuery(
-      { body: { query: sql, threadId, messageId: savedUser?.message?._id } },
       {
-        json: (data) => { queryResult = data; return data; },
-        status: (code) => ({ json: (data) => { queryResult = { code, ...data }; return data; } }),
+        body: {
+          query: sql,
+          threadId,
+          messageId: savedUser?.message?._id,
+          // ADDED: pass the uploaded file reference so the runner uses the exact file DB
+          dbFileMessageId: fileMsg ? fileMsg._id : null,
+        },
+      },
+      {
+        // (keep) capture the JSON body
+        json: (data) => {
+          queryResult = data;
+          return data;
+        },
+        // FIXED: the stub used `{ code, .data }` which broke error capture
+        status: (code) => ({
+          json: (data) => {
+            queryResult = { code, ...data };
+            return data;
+          },
+        }),
       }
     );
 
     if (!queryResult?.rows) throw new Error("No rows returned");
 
-    // Save bot result message
+    // (keep) Save bot result message
     await saveMessageByThreadId({
       threadId,
       userId, // 👈
@@ -87,7 +121,7 @@ export const quickResult = async (req, res) => {
       dbFileMessageId: fileMsg ? fileMsg._id : null,
     });
 
-    // Respond to frontend
+    // (keep) Respond to frontend
     return res.json({
       rows: queryResult.rows,
       threadId,
