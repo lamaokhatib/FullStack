@@ -1,26 +1,62 @@
 // src/controllers/historyController.js
 import Message from '../schemas/messageSchema.js';
+import Chat from '../schemas/chatSchema.js';
+import User from '../schemas/userSchema.js';
 
-// Get all uploaded files from message history
+// Get all uploaded files from *this user's* message history
 export const getUploadHistory = async (req, res) => {
   try {
-    // Find all messages that have file attachments
-    const messagesWithFiles = await Message.find({
-      'file.name': { $exists: true, $ne: null }
-    })
-    .select('file text createdAt threadId')
-    .sort({ createdAt: -1 })
-    .limit(50)
-    .lean();
+    // Resolve session & direct user id candidates
+    const headerSession =
+      req.get("X-Session-Id") ||
+      req.headers["x-session-id"] ||
+      null;
 
-    // Transform the data for the frontend
+    const directUserId =
+      req.userId ||
+      req.query?.userId ||
+      req.body?.userId ||
+      null;
+
+    // If no direct user id, try resolving via session
+    const sessionUser = (!directUserId && headerSession)
+      ? await User.findOne({ sessionId: headerSession }).select("_id")
+      : null;
+
+    const userId = directUserId ?? (sessionUser ? sessionUser._id.toString() : null);
+
+    if (!userId) {
+      return res.status(401).json({ error: "Unauthorized (missing user/session)" });
+    }
+
+    // Find this user's chats
+    const chats = await Chat.find({ user: userId })
+      .select("_id threadId")
+      .lean();
+
+    const chatIds = chats.map(c => c._id);
+    if (chatIds.length === 0) {
+      return res.json([]);
+    }
+
+    // Messages with files from those chats
+    const messagesWithFiles = await Message.find({
+      chat: { $in: chatIds },
+      "file.name": { $exists: true, $ne: null }
+    })
+      .select("file text createdAt threadId")
+      .sort({ createdAt: -1 })
+      .limit(50)
+      .lean();
+
+    // Transform for frontend
     const history = messagesWithFiles.map(msg => ({
       id: msg._id.toString(),
       name: msg.file.name,
       size: msg.file.size,
       updatedAt: msg.file.uploadedAt || msg.createdAt.toISOString(),
       threadId: msg.threadId,
-      preview: msg.text ? msg.text.substring(0, 100) : 'No description',
+      preview: msg.text ? msg.text.substring(0, 100) : "No description",
       mimeType: msg.file.mimeType
     }));
 
