@@ -1,28 +1,79 @@
 // server/src/controllers/queryController.js
 
-// (keep) Node core
+// Node core
 import fs from "fs";
 import os from "os";
 import path from "path";
 
-// (keep) Project utils
+// Project utils
 import openai from "../utils/openaiClient.js";
 import { setDb, getDb } from "../config/dbState.js";
-import fileHandler from "../utils/fileHandler.js";
 import Message from "../schemas/messageSchema.js";
 
-// ADDED: feature flag — default OFF so no AI-simulated rows are returned
+// ===== Feature flags =====
+// OFF: never fabricate rows
 const ALLOW_AI_SIM =
   (process.env.ALLOW_AI_SIMULATION || "false").toLowerCase() === "true";
 
-// (keep) Remove a trailing top-level LIMIT (and optional OFFSET) if present
+// ON: let AI rewrite *statements* that fail during .sql ingestion (safe)
+const ALLOW_AI_SQL_INGEST =
+  (process.env.ALLOW_AI_SQL_INGEST || "true").toLowerCase() === "true";
+
+// ON: let AI repair *queries* (SELECT/WITH) that fail at runtime (safe)
+const ALLOW_AI_SQL_REWRITE =
+  (process.env.ALLOW_AI_SQL_REWRITE || "true").toLowerCase() === "true";
+
+// ===== Helpers =====
+function toBuffer(maybeBinary) {
+  if (!maybeBinary) return null;
+  if (Buffer.isBuffer(maybeBinary)) return maybeBinary;
+  if (maybeBinary?.buffer) return Buffer.from(maybeBinary.buffer);
+  if (Array.isArray(maybeBinary?.data)) return Buffer.from(maybeBinary.data);
+  try { return Buffer.from(maybeBinary); } catch { return null; }
+}
+
 function stripTrailingLimit(sql = "") {
   return sql.replace(/\blimit\s+\d+\s*(offset\s+\d+)?\s*;?\s*$/i, "").trim();
 }
 
-// (keep) SELECT/CTE direct execution on SQLite (uses better-sqlite3)
+function stripCodeFences(s = "") {
+  return (s || "")
+    .replace(/```(?:sql)?/gi, "")
+    .replace(/```/g, "")
+    .trim()
+    .replace(/^["'`](.*)["'`]$/s, "$1");
+}
+
+// Detect likely schema prefixes from SQLite table list (public_users → "public")
+function detectSchemaPrefixes(sqliteTables = []) {
+  const prefixes = new Set();
+  for (const { name } of sqliteTables) {
+    const m = /^([A-Za-z]\w+)_\w+$/.exec(name);
+    if (m) prefixes.add(m[1]);
+  }
+  return Array.from(prefixes);
+}
+
+// Rewrite schema-qualified names (schema.table → schema_table), including quoted
+function rewriteSchemaRefs(sql, schemas = ["public"]) {
+  let out = sql;
+  for (const s of schemas) {
+    const esc = s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    // "schema"."table" -> "schema_table"
+    out = out.replace(new RegExp(`"${esc}"\\s*\\.\\s*"(\\w+)"`, "gi"), `"${s}_$1"`);
+    // schema."table" -> "schema_table"
+    out = out.replace(new RegExp(`\\b${esc}\\s*\\.\\s*"(\\w+)"`, "gi"), `"${s}_$1"`);
+    // "schema".table -> "schema_table"
+    out = out.replace(new RegExp(`"${esc}"\\s*\\.\\s*(\\w+)`, "gi"), `"${s}_$1"`);
+    // schema.table -> schema_table
+    out = out.replace(new RegExp(`\\b${esc}\\s*\\.\\s*(\\w+)`, "gi"), `${s}_$1`);
+  }
+  return out;
+}
+
+// Execute SELECT/CTE
 async function execSqliteSelect(dbPath, sql) {
-  const cleaned = (sql || "").trim();
+  const cleaned = stripCodeFences(sql);
   if (!/^(select|with)\b/i.test(cleaned)) {
     throw new Error("Only SELECT/CTE queries are supported for direct execution");
   }
@@ -36,12 +87,12 @@ async function execSqliteSelect(dbPath, sql) {
   }
 }
 
-// ADDED: Execute INSERT/UPDATE/DELETE/etc. and return affected row count
+// Execute INSERT/UPDATE/DELETE…
 async function execSqliteMutating(dbPath, sql) {
   const { default: Database } = await import("better-sqlite3");
   const db = new Database(dbPath);
   try {
-    db.exec(sql);
+    db.exec(stripCodeFences(sql));
     const info = db.prepare("SELECT changes() AS changes").get();
     return { changes: info?.changes ?? 0 };
   } finally {
@@ -49,7 +100,90 @@ async function execSqliteMutating(dbPath, sql) {
   }
 }
 
-// ADDED: Build a temporary SQLite DB from .sql / .json / .csv so we always run against real data
+// Build (table → columns) and table list
+async function readSqliteSchema(dbPath) {
+  const { default: Database } = await import("better-sqlite3");
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+    const schema = {};
+    for (const { name } of tables) {
+      const cols = db.prepare(`PRAGMA table_info("${name}")`).all();
+      schema[name] = cols.map((c) => c.name);
+    }
+    return { schema, tables };
+  } finally {
+    db.close();
+  }
+}
+
+// AI: rewrite SQL (SELECT/WITH) into valid SQLite using exact tables/columns
+async function aiRewriteSqlToSqlite({ sql, tables, schema, prefixes, error }) {
+  const messages = [
+    {
+      role: "system",
+      content:
+        "You are a SQL fixer. Rewrite the user's SQL into a SQLite-compatible SQL query that will run on the provided tables/columns. " +
+        "Respect the table names exactly as given. If the SQL uses schema-qualified names like public.users, rewrite to the SQLite table name (e.g., public_users). " +
+        "Only return a runnable SQL string. No comments, no explanations, no DDL. Prefer SELECT/WITH. Never fabricate data.",
+    },
+    {
+      role: "user",
+      content:
+`SQLite tables and columns:
+${Object.entries(schema).map(([t, cols]) => `- ${t}(${cols.join(", ")})`).join("\n")}
+
+Schema prefixes to map to underscore form:
+${prefixes.join(", ") || "(none)"}
+
+Original SQL (may be Postgres/MySQL):
+${sql}
+
+SQLite engine error:
+${error}
+
+Rewrite the SQL into valid SQLite (SELECT/WITH only). Return ONLY the SQL.`,
+    },
+  ];
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages,
+  });
+
+  return stripCodeFences(completion.choices?.[0]?.message?.content || "");
+}
+
+// AI: fix one failing SQL *statement* (during ingestion) into SQLite form
+async function aiFixSqlChunkForSqlite({ chunk, knownTables = [], note = "" }) {
+  if (!ALLOW_AI_SQL_INGEST) throw new Error("AI SQL ingest disabled");
+  const tableList = knownTables.length ? `SQLite tables already created:\n- ${knownTables.join("\n- ")}\n\n` : "";
+  const messages = [
+    {
+      role: "system",
+      content:
+        "Rewrite the provided SQL *statement* so it runs in SQLite. " +
+        "If it is PostgreSQL-specific (schemas like public.books, COPY, ON CONFLICT DO NOTHING, ONLY, ::casts, ILIKE), convert it. " +
+        "If the statement is not needed in SQLite (e.g., CREATE SCHEMA, GRANT, COMMENT), return exactly: -- SKIP.\n" +
+        "Return *only* runnable SQL or -- SKIP. No explanations."
+    },
+    {
+      role: "user",
+      content:
+`${tableList}${note ? `Note: ${note}\n\n` : ""}Original statement:
+${chunk}`
+    }
+  ];
+
+  const completion = await openai.chat.completions.create({
+    model: "gpt-4o-mini",
+    messages
+  });
+  let fixed = stripCodeFences(completion.choices?.[0]?.message?.content || "");
+  return fixed;
+}
+
+// Ingest .sql/.json/.csv to a temp SQLite DB; robust Postgres pg_dump support & messy files
 async function ensureSqliteDbFromFile(filePath, originalName = "") {
   if (!filePath) return null;
 
@@ -61,23 +195,31 @@ async function ensureSqliteDbFromFile(filePath, originalName = "") {
   const tmpDb = path.join(os.tmpdir(), `${Date.now()}-ingested.db`);
   const db = new Database(tmpDb);
 
+  // helper: does table exist?
+  const tableExists = (name) => {
+    const row = db.prepare(`SELECT name FROM sqlite_master WHERE type='table' AND name = ?`).get(name);
+    return !!row;
+  };
+  // helper: create basic table with TEXT columns from a column list
+  const ensureTable = (name, columns) => {
+    if (tableExists(name)) return;
+    const cols = columns.map((c) => `"${c}" TEXT`).join(", ");
+    db.exec(`CREATE TABLE "${name}" (${cols});`);
+  };
+
   try {
     if (lower.endsWith(".sql")) {
-      const sqlText = fs.readFileSync(filePath, "utf-8");
-      const isPgDump =
-        /PostgreSQL database dump|pg_dump|SET\s+statement_timeout/i.test(sqlText);
+      const rawText = fs.readFileSync(filePath, "utf-8");
 
-      if (!isPgDump) {
-        // Plain SQLite DDL — try to execute directly
-        db.exec(sqlText);
+      const isPgLike = /PostgreSQL database dump|pg_dump|SET\s+|CREATE\s+SCHEMA|COPY\s+.+\s+FROM\s+stdin|OWNER TO|ALTER TABLE|INSERT\s+INTO|::|ILIKE/i.test(rawText);
+
+      // fast path: plain SQLite with no schema dots
+      if (!isPgLike && !/\b(create|insert|update|delete|from|join)\b[^;]*\w+\s*\.\s*\w+/i.test(rawText)) {
+        db.exec(rawText);
         return tmpDb;
       }
 
-      // ---- Minimal PostgreSQL → SQLite importer for pg_dump ----
-      // 1) CREATE TABLE (basic column types)
-      // 2) COPY ... FROM stdin (tab-delimited) → INSERT
-      // Skips: SET/ALTER/SCHEMA/GRANT/REVOKE/COMMENT/TRIGGER/FUNCTION/constraints
-      const lines = sqlText.split(/\r?\n/);
+      const lines = rawText.split(/\r?\n/);
 
       const skipStarts = [
         "SET ",
@@ -87,141 +229,164 @@ async function ensureSqliteDbFromFile(filePath, originalName = "") {
         "REVOKE ",
         "GRANT ",
         "COMMENT ON ",
+        "CREATE EXTENSION",
+        "ALTER SEQUENCE",
+        "DROP SCHEMA",
+        "LOCK TABLE",
+        "COMMIT",
+        "BEGIN",
+        "\\connect"
       ];
 
-      const normalizeType = (t) =>
-        t
-          .replace(/character varying\(\d+\)/gi, "TEXT")
-          .replace(/\bvarchar\(\d+\)/gi, "TEXT")
-          .replace(/\btext\b/gi, "TEXT")
-          .replace(/\btime without time zone\b/gi, "TEXT")
-          .replace(/\btimestamp without time zone\b/gi, "TEXT")
-          .replace(/\btimestamp with time zone\b/gi, "TEXT")
-          .replace(/\bdate\b/gi, "TEXT")
-          .replace(/\bboolean\b/gi, "INTEGER")
-          .replace(/\binteger\b/gi, "INTEGER")
-          .replace(/\bsmallint\b/gi, "INTEGER")
-          .replace(/\bbigint\b/gi, "INTEGER")
-          .replace(/\bserial\b/gi, "INTEGER")
-          .replace(/\bdouble precision\b/gi, "REAL")
-          .replace(/\bnumeric\(\d+(,\s*\d+)?\)/gi, "REAL");
-
       const toSqliteName = (qname) => {
-        // "public.users" -> "public_users" ; "\"public\".\"users\"" -> "public_users"
         const unq = qname.replace(/"/g, "");
         const parts = unq.split(".");
         return parts.length === 2 ? `${parts[0]}_${parts[1]}` : unq;
+      };
+
+      // track created tables for AI hints
+      const createdTables = new Set();
+
+      // helper: run a chunk; on failure, try deterministic rewrite; if still fails → AI
+      const runChunkWithAiRepair = async (chunk, note = "") => {
+        const sanitized = stripCodeFences(chunk).trim();
+        if (!sanitized) return;
+
+        // Deterministic quick fixes
+        let sql = sanitized
+          .replace(/\bONLY\s+/gi, "")
+          .replace(/\bOVERRIDING\s+SYSTEM\s+VALUE\b/gi, "")
+          .replace(/\bON\s+CONFLICT\s+DO\s+NOTHING\b/gi, "")
+          .replace(/\bUSING\b\s+\w+\s*\(([^)]+)\)/gi, "")
+          .replace(/\bRETURNS\b[\s\S]*?\bAS\b/gi, "")
+          .replace(/\bLANGUAGE\b\s+\w+/gi, "")
+          .replace(/\bOWNER\s+TO\b[^\s;]+;?/gi, "")
+          .replace(/::\s*\w+/g, "")
+          .replace(/\bILIKE\b/gi, "LIKE");
+
+        // strip REFERENCES ... in column defs (FKs)
+        sql = sql.replace(/\bREFERENCES\b[\s\S]*?(?=,|\))/gi, "");
+
+        // global schema rewrite
+        sql = rewriteSchemaRefs(sql, ["public"]);
+
+        try {
+          db.exec(sql);
+          return;
+        } catch (e) {
+          if (!ALLOW_AI_SQL_INGEST) throw e;
+          const fixed = await aiFixSqlChunkForSqlite({
+            chunk: sql,
+            knownTables: Array.from(createdTables),
+            note
+          });
+          if (!fixed || /^--\s*SKIP/i.test(fixed)) return;
+
+          // Guard: if AI tried "ADD COLUMN ... PRIMARY KEY" (SQLite can't), split it
+          const mAddColPk = fixed.match(
+            /ALTER\s+TABLE\s+("?[\w]+"?)\s+ADD\s+COLUMN\s+("?[\w]+"?).*?PRIMARY\s+KEY/iu
+          );
+          if (mAddColPk) {
+            const table = mAddColPk[1].replace(/"/g, "");
+            const col = mAddColPk[2].replace(/"/g, "");
+            const withoutPk = fixed.replace(/PRIMARY\s+KEY/gi, ""); // add the column without PK
+            try { db.exec(withoutPk); } catch {}
+            try { db.exec(`CREATE UNIQUE INDEX IF NOT EXISTS "${table}__${col}__pk" ON "${table}" ("${col}");`); } catch {}
+            return;
+          }
+
+          db.exec(fixed);
+        }
       };
 
       let i = 0;
       while (i < lines.length) {
         let line = lines[i].trim();
 
-        // comments/blank
-        if (!line || line.startsWith("--")) {
-          i++;
-          continue;
-        }
+        // skip comments, blanks, and ellipsis placeholders
+        if (!line || line.startsWith("--") || line === "..." || line === "…") { i++; continue; }
 
-        // skip known pg-only statements
-        if (skipStarts.some((s) => line.startsWith(s))) {
-          i++;
-          continue;
-        }
+        // skip pure pg/meta lines
+        if (skipStarts.some((s) => line.startsWith(s))) { i++; continue; }
 
-        // skip CREATE FUNCTION ... $$ ... $$;
-        if (/^CREATE FUNCTION\b/i.test(line)) {
-          i++;
-          while (i < lines.length && !/\$\$\s*;?\s*$/.test(lines[i])) i++;
-          i++; // skip "$$" end
-          continue;
-        }
-
-        // skip CREATE TRIGGER ... ;
-        if (/^CREATE TRIGGER\b/i.test(line)) {
-          while (i < lines.length && !/;\s*$/.test(lines[i])) i++;
-          i++; // skip ;
-          continue;
-        }
-
-        // skip ALTER TABLE ... (constraints/fks)
-        if (/^ALTER TABLE\b/i.test(line)) {
-          while (i < lines.length && !/;\s*$/.test(lines[i])) i++;
-          i++;
-          continue;
-        }
-
-        // CREATE TABLE ... ( ... );
-        if (/^CREATE TABLE\b/i.test(line)) {
-          let chunk = line;
-          i++;
-          while (i < lines.length && !/\);\s*$/.test(lines[i])) {
-            chunk += "\n" + lines[i];
-            i++;
+        // 1) CREATE TABLE … ( … );
+        if (/^CREATE\s+TABLE\b/i.test(line)) {
+          let chunk = line; i++;
+          while (i < lines.length && !/\);\s*;?\s*$/.test(lines[i])) {
+            chunk += "\n" + lines[i]; i++;
           }
-          if (i < lines.length) chunk += "\n" + lines[i]; // include closing );
+          if (i < lines.length) chunk += "\n" + lines[i];
           i++;
 
-          const m = chunk.match(/CREATE TABLE\s+([^\s(]+)\s*\(([\s\S]*)\);\s*$/i);
-          if (!m) continue;
-          const rawName = m[1]; // e.g., public.users
-          const colsRaw = m[2]; // inside (...)
+          const m = chunk.match(/CREATE\s+TABLE\s+(?:IF\s+NOT\s+EXISTS\s+)?([^\s(]+)\s*\(([\s\S]*?)\)\s*;?$/i);
+          if (m) {
+            const rawName = m[1], colsRaw = m[2];
+            const table = toSqliteName(rawName);
 
-          const table = toSqliteName(rawName);
+            const colLines = colsRaw
+              .split(/,(?![^()]*\))/)
+              .map((s) => s.trim())
+              .filter(Boolean);
 
-          // split top-level commas (naive but ok for common dumps)
-          const colLines = colsRaw
-            .split(/,(?![^()]*\))/)
-            .map((s) => s.trim())
-            .filter((s) => s && !/^CONSTRAINT\b/i.test(s));
+            const cols = colLines
+              .filter((s) => !/^CONSTRAINT\b/i.test(s))
+              .map((def) => {
+                const parts = def.split(/\s+/);
+                const colName = parts.shift().replace(/"/g, "");
+                let rest = parts.join(" ");
+                rest = rest
+                  .replace(/character varying\(\d+\)/gi, "TEXT")
+                  .replace(/\bvarchar\(\d+\)/gi, "TEXT")
+                  .replace(/\btext\b/gi, "TEXT")
+                  .replace(/\btime without time zone\b/gi, "TEXT")
+                  .replace(/\btimestamp (with|without) time zone\b/gi, "TEXT")
+                  .replace(/\bdate\b/gi, "TEXT")
+                  .replace(/\bboolean\b/gi, "INTEGER")
+                  .replace(/\b(in|small|big)?integer\b/gi, "INTEGER")
+                  .replace(/\bserial\b/gi, "INTEGER")
+                  .replace(/\bdouble precision\b/gi, "REAL")
+                  .replace(/\bnumeric\(\d+(,\s*\d+)?\)/gi, "REAL")
+                  .replace(/\bNOT NULL\b/gi, "")
+                  .replace(/\bDEFAULT\b[\s\S]*$/i, "")
+                  .replace(/\bPRIMARY KEY\b/gi, "");
+                return `"${colName}" ${rest || "TEXT"}`.trim();
+              });
 
-          const cols = colLines
-            .map((def) => {
-              // "uid integer NOT NULL DEFAULT nextval(...)" -> ["uid","integer NOT NULL DEFAULT nextval(...)"]
-              const parts = def.split(/\s+/);
-              const colName = parts.shift().replace(/"/g, "");
-              const rest = normalizeType(parts.join(" "));
-              // strip NOT NULL / DEFAULT ... / PRIMARY KEY (handled loosely)
-              const cleaned = rest
-                .replace(/\bNOT NULL\b/gi, "")
-                .replace(/\bDEFAULT\b[\s\S]*$/i, "")
-                .replace(/\bPRIMARY KEY\b/gi, "");
-              return `"${colName}" ${cleaned || "TEXT"}`.trim();
-            })
-            .filter(Boolean);
-
-          const createSql = `CREATE TABLE "${table}" (${cols.join(", ")});`;
-          db.exec(createSql);
+            try {
+              db.exec(`CREATE TABLE "${table}" (${cols.join(", ")});`);
+              createdTables.add(table);
+            } catch (e) {
+              await runChunkWithAiRepair(chunk, "CREATE TABLE failed");
+            }
+          } else {
+            await runChunkWithAiRepair(chunk, "Unparsed CREATE TABLE");
+          }
           continue;
         }
 
-        // COPY public.users (uid, name, ...) FROM stdin;
+        // 2) COPY public.table (cols) FROM stdin;  (tab-separated)  ...  \.
         if (/^COPY\b/i.test(line) && /FROM\s+stdin;?$/i.test(line)) {
-          const m = line.match(
-            /^COPY\s+([^\s(]+)\s*\(([^)]+)\)\s+FROM\s+stdin;?$/i
-          );
-          if (!m) {
-            i++;
-            continue;
-          }
+          const m = line.match(/^COPY\s+([^\s(]+)\s*\(([^)]+)\)\s+FROM\s+stdin;?$/i);
+          if (!m) { i++; continue; }
           const rawName = m[1];
           const table = toSqliteName(rawName);
-          const columns = m[2].split(",").map((s) => s.replace(/"/g, "").trim());
+          const columns = m[2].split(",").map(s => s.replace(/"/g, "").trim());
+
+          if (!tableExists(table)) {
+            const cols = columns.map(c => `"${c}" TEXT`).join(", ");
+            db.exec(`CREATE TABLE "${table}" (${cols});`);
+            createdTables.add(table);
+          }
 
           const placeholders = columns.map(() => "?").join(", ");
-          const stmt = db.prepare(
-            `INSERT INTO "${table}" (${columns
-              .map((c) => `"${c}"`)
-              .join(", ")}) VALUES (${placeholders})`
-          );
-          const tx = db.transaction((rows) => {
-            for (const r of rows) stmt.run(r);
-          });
+          const stmt = db.prepare(`INSERT INTO "${table}" (${columns.map((c) => `"${c}"`).join(", ")}) VALUES (${placeholders})`);
+          const tx = db.transaction((rows) => { for (const r of rows) stmt.run(r); });
 
           i++;
           const batch = [];
           while (i < lines.length && lines[i].trim() !== "\\.") {
-            const row = lines[i].split("\t").map((v) => (v === "\\N" ? null : v));
+            if (lines[i].trim() === "..." || lines[i].trim() === "…") { i++; continue; }
+            const row = lines[i].split("\t").map(v => (v === "\\N" ? null : v));
             batch.push(row);
             if (batch.length >= 1000) tx(batch.splice(0));
             i++;
@@ -231,44 +396,108 @@ async function ensureSqliteDbFromFile(filePath, originalName = "") {
           continue;
         }
 
-        // Anything else: ignore
-        i++;
+        // 2a) ALTER TABLE ... ADD CONSTRAINT ... PRIMARY KEY (...);  → UNIQUE INDEX
+        if (/^ALTER\s+TABLE\b/i.test(line)) {
+          let chunk = line; i++;
+          while (i < lines.length && !/;\s*$/.test(lines[i])) { chunk += "\n" + lines[i]; i++; }
+          if (i < lines.length) chunk += "\n" + lines[i];
+          i++;
+
+          const mPk = chunk.match(
+            /ALTER\s+TABLE\s+ONLY?\s+([^\s]+)[\s\S]*?ADD\s+CONSTRAINT\s+(\w+)\s+PRIMARY\s+KEY\s*\(([^)]+)\)/i
+          );
+          if (mPk) {
+            const rawTable = mPk[1];
+            const cols = mPk[3].split(",").map(s => s.replace(/"/g, "").trim());
+            const table = toSqliteName(rawTable);
+            const idxName = `${table}__pk`;
+            const idxSql = `CREATE UNIQUE INDEX IF NOT EXISTS "${idxName}" ON "${table}" (${cols.map(c => `"${c}"`).join(", ")});`;
+            try { db.exec(idxSql); } catch {}
+            continue;
+          }
+
+          // Skip other constraints (FKs etc)
+          if (/ADD\s+CONSTRAINT\b/i.test(chunk) || /\bFOREIGN\s+KEY\b/i.test(chunk)) {
+            continue;
+          }
+
+          // otherwise: try repair
+          await runChunkWithAiRepair(chunk, "ALTER TABLE fallback");
+          continue;
+        }
+
+        // 3) INSERT INTO [ONLY] public.table (...) VALUES (...), (...);
+        if (/^INSERT\s+INTO\b/i.test(line)) {
+          let chunk = line; i++;
+          while (i < lines.length && !/;\s*$/.test(lines[i])) {
+            chunk += "\n" + lines[i]; i++;
+          }
+          if (i < lines.length) chunk += "\n" + lines[i];
+          i++;
+
+          try {
+            // Rewrite schema refs, ensure table exists from column list
+            let sql = rewriteSchemaRefs(chunk, ["public"]);
+            const m = sql.match(/INSERT\s+INTO\s+("?[\w]+"?(?:\s*\.\s*"?[\w]+"?)?)\s*\(([^)]+)\)\s+VALUES/i);
+            if (m) {
+              const raw = m[1].replace(/"/g, "").replace(/\s/g, "");
+              const table = toSqliteName(raw);
+              const columns = m[2].split(",").map((s) => s.replace(/"/g, "").trim());
+              ensureTable(table, columns);
+              sql = sql.replace(m[1], `"${table}"`);
+            }
+            // drop ONLY keyword
+            sql = sql.replace(/\bONLY\s+/gi, "");
+            db.exec(sql);
+          } catch (e) {
+            const alt = rewriteSchemaRefs(
+              chunk.replace(/\bONLY\s+/gi, "").replace(/\bOVERRIDING\s+SYSTEM\s+VALUE\b/gi, ""),
+              ["public"]
+            );
+            try { db.exec(alt); } catch { await runChunkWithAiRepair(chunk, "INSERT fallback"); }
+          }
+          continue;
+        }
+
+        // 4) Any other statement: collect until ';' and run with repair
+        if (!/;\s*$/.test(line)) {
+          let chunk = line; i++;
+          while (i < lines.length && !/;\s*$/.test(lines[i])) { chunk += "\n" + lines[i]; i++; }
+          if (i < lines.length) chunk += "\n" + lines[i];
+          i++;
+          await runChunkWithAiRepair(chunk);
+          continue;
+        } else {
+          await runChunkWithAiRepair(line);
+          i++;
+          continue;
+        }
       }
 
       return tmpDb;
     }
 
     if (lower.endsWith(".json")) {
-      // If it’s an array, create table "data"; if object of tables, create each
       const raw = fs.readFileSync(filePath, "utf-8");
       const json = JSON.parse(raw);
       const tables = Array.isArray(json) ? { data: json } : json;
-
-      const { default: Database } = await import("better-sqlite3");
       for (const [table, rows] of Object.entries(tables)) {
         if (!Array.isArray(rows) || rows.length === 0) continue;
         const cols = Object.keys(rows[0]);
-        db.exec(
-          `CREATE TABLE "${table}" (${cols.map((c) => `"${c}"`).join(", ")});`
-        );
+        db.exec(`CREATE TABLE "${table}" (${cols.map((c) => `"${c}"`).join(", ")});`);
         const stmt = db.prepare(
-          `INSERT INTO "${table}" (${cols
-            .map((c) => `"${c}"`)
-            .join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`
+          `INSERT INTO "${table}" (${cols.map((c) => `"${c}"`).join(", ")}) VALUES (${cols.map(() => "?").join(", ")})`
         );
-        const tx = db.transaction((items) => {
-          for (const r of items) stmt.run(cols.map((c) => r[c]));
-        });
+        const tx = db.transaction((items) => { for (const r of items) stmt.run(cols.map((c) => r[c])); });
         tx(rows);
       }
       return tmpDb;
     }
 
     if (lower.endsWith(".csv")) {
-      // Minimal CSV support (comma-separated, header row, no quoted commas)
       const text = fs.readFileSync(filePath, "utf-8");
       const lines = text.split(/\r?\n/).filter(Boolean);
-      if (lines.length === 0) return tmpDb;
+      if (!lines.length) return tmpDb;
       const header = lines[0].split(",").map((s) => s.trim());
       db.exec(`CREATE TABLE data (${header.map((c) => `"${c}"`).join(", ")});`);
       const stmt = db.prepare(
@@ -277,9 +506,7 @@ async function ensureSqliteDbFromFile(filePath, originalName = "") {
       );
       const tx = db.transaction((rows) => {
         for (let i = 1; i < rows.length; i++) {
-          const raw = rows[i].trim();
-          if (!raw) continue;
-          const vals = raw.split(",");
+          const vals = rows[i].split(",");
           const padded = header.map((_, idx) => (vals[idx] ?? "").trim());
           stmt.run(padded);
         }
@@ -288,14 +515,47 @@ async function ensureSqliteDbFromFile(filePath, originalName = "") {
       return tmpDb;
     }
 
-    // Unknown type → just return original; direct execute may error and we’ll report it
     return filePath;
   } finally {
     db.close();
   }
 }
 
-// (keep) Main controller
+// If a SELECT returns 0 rows, try mapping base table names to schema_table (e.g., users → public_users)
+async function aliasRetryIfEmpty(dbPath, sql, prefixes = ["public"]) {
+  const { default: Database } = await import("better-sqlite3");
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'")
+      .all()
+      .map(r => r.name);
+
+    const aliasMap = {};
+    for (const t of tables) {
+      const m = /^([A-Za-z]\w+)_(\w+)$/.exec(t);
+      if (m && prefixes.includes(m[1])) {
+        const base = m[2];
+        if (!aliasMap[base]) aliasMap[base] = t; // first seen
+      }
+    }
+
+    let rewritten = sql;
+    let changed = false;
+    for (const base of Object.keys(aliasMap)) {
+      const re = new RegExp(`\\b${base}\\b`, "g");
+      if (re.test(rewritten)) {
+        rewritten = rewritten.replace(re, `"${aliasMap[base]}"`);
+        changed = true;
+      }
+    }
+    return changed ? rewritten : null;
+  } finally {
+    db.close();
+  }
+}
+
+// ===== Main controller =====
 export const runSqlQuery = async (req, res) => {
   try {
     const { query, messageId, threadId, dbFileMessageId, fullExport } = req.body;
@@ -310,88 +570,77 @@ export const runSqlQuery = async (req, res) => {
     console.log("=== SQL Query Execution Debug ===");
     console.log("Request params:", { messageId, threadId, dbFileMessageId });
 
-    // Strategy 1: Use explicit dbFileMessageId if provided
+    // Strategy 1: explicit DB file reference
     if (dbFileMessageId) {
       try {
-        console.log("Strategy 1: Looking for DB file with dbFileMessageId:", dbFileMessageId);
         const fileMsg = await Message.findById(dbFileMessageId);
         if (fileMsg?.file?.data) {
           const tmpPath = path.join(os.tmpdir(), `${Date.now()}-${fileMsg.file.name}`);
-          fs.writeFileSync(tmpPath, fileMsg.file.data);
+          const buf = toBuffer(fileMsg.file.data);
+          if (!buf) throw new Error("Could not convert file binary to Buffer");
+          fs.writeFileSync(tmpPath, buf);
           setDb(tmpPath);
           dbPath = tmpPath;
           foundVia = "explicit_dbFileMessageId";
-          console.log("Strategy 1 SUCCESS:", tmpPath);
-        } else {
-          console.log("Strategy 1 FAILED: File message found but no file data");
         }
       } catch (err) {
         console.log("Strategy 1 ERROR:", err.message);
       }
     }
 
-    // Strategy 2: Look up the message and use its dbFileMessageId
+    // Strategy 2: use message’s dbFileMessageId
     if (!dbPath && messageId) {
       try {
-        console.log("Strategy 2: Looking up message:", messageId);
         const msg = await Message.findById(messageId);
         if (msg?.dbFileMessageId) {
           const fileMsg = await Message.findById(msg.dbFileMessageId);
           if (fileMsg?.file?.data) {
             const tmpPath = path.join(os.tmpdir(), `${Date.now()}-${fileMsg.file.name}`);
-            fs.writeFileSync(tmpPath, fileMsg.file.data);
+            const buf = toBuffer(fileMsg.file.data);
+            if (!buf) throw new Error("Could not convert file binary to Buffer");
+            fs.writeFileSync(tmpPath, buf);
             setDb(tmpPath);
             dbPath = tmpPath;
             foundVia = "message_dbFileMessageId";
-            console.log("Strategy 2 SUCCESS:", tmpPath);
-          } else {
-            console.log("Strategy 2 FAILED: file data missing");
           }
-        } else {
-          console.log("Strategy 2 FAILED: message has no dbFileMessageId");
         }
       } catch (err) {
         console.log("Strategy 2 ERROR:", err.message);
       }
     }
 
-    // Strategy 3: Find the most recent file in the thread
+    // Strategy 3: any file in thread
     if (!dbPath && threadId) {
       try {
-        console.log("Strategy 3: Searching any file in thread:", threadId);
         const fileMsg = await Message.findOne({
           threadId,
           "file.data": { $exists: true, $ne: null },
-        })
-          .sort({ createdAt: -1 })
-          .lean();
+        }).sort({ createdAt: -1 });
 
         if (fileMsg?.file?.data) {
           const tmpPath = path.join(os.tmpdir(), `${Date.now()}-${fileMsg.file.name}`);
-          fs.writeFileSync(tmpPath, fileMsg.file.data);
+          const buf = toBuffer(fileMsg.file.data);
+          if (!buf) throw new Error("Could not convert file binary to Buffer");
+          fs.writeFileSync(tmpPath, buf);
           setDb(tmpPath);
           dbPath = tmpPath;
           foundVia = "thread_search";
-          console.log("Strategy 3 SUCCESS:", tmpPath);
-        } else {
-          console.log("Strategy 3 FAILED: no file data in thread");
         }
       } catch (err) {
         console.log("Strategy 3 ERROR:", err.message);
       }
     }
 
-    // Strategy 4: Fall back to a globally set DB if present
+    // Strategy 4: global fallback
     if (!dbPath) {
       const globalDb = getDb();
       if (globalDb) {
         dbPath = globalDb;
         foundVia = "global_fallback";
-        console.log("Strategy 4: Using global DB:", dbPath);
       }
     }
 
-    // If we have a path, convert non-DBs (.sql/.json/.csv) into a temp SQLite DB
+    // Ingest to real SQLite if needed
     if (dbPath) {
       const ingested = await ensureSqliteDbFromFile(dbPath);
       if (ingested && ingested !== dbPath) {
@@ -400,71 +649,81 @@ export const runSqlQuery = async (req, res) => {
       }
     }
 
-    // Attempt real execution first
-    const sqlToRun = fullExport ? stripTrailingLimit(query) : query;
-    const isSelect = /^(select|with)\b/i.test(sqlToRun.trim());
+    // Build schema & prefixes for rewrites
+    let schemaInfo = { schema: {}, tables: [] };
+    try { if (dbPath && fs.existsSync(dbPath)) schemaInfo = await readSqliteSchema(dbPath); } catch {}
+    const prefixes = detectSchemaPrefixes(schemaInfo.tables);
 
+    // Prepare SQL
+    const originalSql = stripCodeFences(query);
+    const sqlPrepared = rewriteSchemaRefs(fullExport ? stripTrailingLimit(originalSql) : originalSql, prefixes.length ? prefixes : ["public"]);
+    const isSelect = /^(select|with)\b/i.test(sqlPrepared.trim());
+
+    // Execute
     if (dbPath && fs.existsSync(dbPath)) {
       try {
         if (isSelect) {
-          let rows = await execSqliteSelect(dbPath, sqlToRun);
+          let rows = await execSqliteSelect(dbPath, sqlPrepared);
 
-          // If query used Postgres schema (public.users), retry with public_ rewrite on failure/empty?
-          // Only retry if it *failed*, not when it returns rows. We do that in catch below.
-
-          // Clean up temporary file if we created one
-          if (foundVia !== "global_fallback" && dbPath && fs.existsSync(dbPath)) {
-            setTimeout(() => {
+          // If empty, try alias rewrite like users -> public_users (or other detected prefixes)
+          if (!rows || rows.length === 0) {
+            const aliasSql = await aliasRetryIfEmpty(dbPath, sqlPrepared, prefixes.length ? prefixes : ["public"]);
+            if (aliasSql && aliasSql !== sqlPrepared) {
               try {
-                fs.unlinkSync(dbPath);
-                console.log("Cleaned up temporary file:", dbPath);
-              } catch (err) {
-                console.warn("Failed to clean up temporary file:", err.message);
-              }
-            }, 1000);
+                const rows2 = await execSqliteSelect(dbPath, aliasSql);
+                if (rows2 && rows2.length) {
+                  return res.json({ rows: rows2, foundVia, mode: "sqlite", aliasRewritten: true });
+                }
+              } catch { /* fall through; we'll return the original empty result below */ }
+            }
           }
 
           return res.json({ rows, foundVia, mode: "sqlite" });
         } else {
-          const { changes } = await execSqliteMutating(dbPath, sqlToRun);
-
-          if (foundVia !== "global_fallback" && dbPath && fs.existsSync(dbPath)) {
-            setTimeout(() => {
-              try {
-                fs.unlinkSync(dbPath);
-                console.log("Cleaned up temporary file:", dbPath);
-              } catch (err) {
-                console.warn("Failed to clean up temporary file:", err.message);
-              }
-            }, 1000);
-          }
-
-          // Maintain "rows" shape for UI
+          const { changes } = await execSqliteMutating(dbPath, sqlPrepared);
           return res.json({ rows: [{ affected_rows: changes }], foundVia, mode: "sqlite" });
         }
       } catch (e) {
-        console.warn("SQLite execution failed:", e.message);
-
-        // ADDED: If query uses Postgres schema notation (public.users), retry with public_ prefix
-        if (/\bpublic\./i.test(sqlToRun)) {
-          try {
-            const rewritten = sqlToRun.replace(/\bpublic\./gi, "public_");
+        // Second-pass schema rewrite and retry
+        try {
+          const second = rewriteSchemaRefs(sqlPrepared, prefixes.length ? prefixes : ["public"]);
+          if (second !== sqlPrepared) {
             if (isSelect) {
-              const rows = await execSqliteSelect(dbPath, rewritten);
+              const rows = await execSqliteSelect(dbPath, second);
               return res.json({ rows, foundVia, mode: "sqlite" });
             } else {
-              const { changes } = await execSqliteMutating(dbPath, rewritten);
+              const { changes } = await execSqliteMutating(dbPath, second);
               return res.json({ rows: [{ affected_rows: changes }], foundVia, mode: "sqlite" });
             }
-          } catch {
-            // fall through to the error handling below
+          }
+        } catch { /* ignore and fall through */ }
+
+        // AI SQL REPAIR (not row simulation) — only for SELECT/WITH
+        if (ALLOW_AI_SQL_REWRITE && isSelect) {
+          try {
+            const fixed = await aiRewriteSqlToSqlite({
+              sql: sqlPrepared,
+              tables: schemaInfo.tables,
+              schema: schemaInfo.schema,
+              prefixes: prefixes.length ? prefixes : ["public"],
+              error: e.message || String(e),
+            });
+            if (fixed) {
+              const rows = await execSqliteSelect(dbPath, fixed);
+              return res.json({ rows, foundVia, mode: "sqlite", rewritten: true });
+            }
+          } catch (e2) {
+            console.warn("AI SQL rewrite failed:", e2.message);
           }
         }
-        // fall through to AI (if enabled) or error
+
+        if (!ALLOW_AI_SIM) {
+          return res.status(400).json({ error: `Could not execute SQL: ${e.message}` });
+        }
       }
     }
 
-    // (keep) AI simulation path — now gated behind env flag and OFF by default
+    // (Disabled by default) — AI "simulate rows" path
     if (!ALLOW_AI_SIM) {
       return res.status(400).json({
         error: "Could not execute SQL against any database. (AI simulation is disabled)",
@@ -472,53 +731,27 @@ export const runSqlQuery = async (req, res) => {
       });
     }
 
-    // (keep) Load schema for AI simulation
-    const schema = await fileHandler(dbPath);
-    console.log("Schema loaded:", Object.keys(schema));
-
-    // (keep) Ask OpenAI to simulate running the query and return rows
+    // Optional simulation (testing only)
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        {
-          role: "system",
-          content: `You are a SQL execution engine.
-The user will give you:
-1) A database schema in JSON.
-2) An SQL query.
-You must return only JSON rows that would result from running the query on that schema.
-Use realistic sample data if needed.
-Return the result as a JSON object with a "rows" array.`,
-        },
-        {
-          role: "user",
-          content: `Schema: ${JSON.stringify(schema, null, 2)}\n\nQuery: ${sqlToRun}`,
-        },
+        { role: "system", content: "Return ONLY a JSON object with a 'rows' array simulating the SELECT results. Do not explain." },
+        { role: "user", content: stripCodeFences(sqlPrepared) },
       ],
       response_format: { type: "json_object" },
     });
 
-    // (keep) Parse AI JSON
     let rows = [];
     try {
       const raw = completion.choices[0].message.content;
       const parsed = JSON.parse(raw);
-      if (Array.isArray(parsed)) {
-        rows = parsed;
-      } else if (parsed.rows && Array.isArray(parsed.rows)) {
-        rows = parsed.rows;
-      } else if (parsed.data && Array.isArray(parsed.data)) {
-        rows = parsed.data;
-      } else {
-        rows = Object.values(parsed).find((val) => Array.isArray(val)) || [];
-      }
-    } catch (err) {
-      console.error("Failed to parse OpenAI response:", err.message);
-      console.error("Raw response:", completion.choices[0].message.content);
+      rows = Array.isArray(parsed) ? parsed :
+             Array.isArray(parsed.rows) ? parsed.rows :
+             Array.isArray(parsed.data) ? parsed.data :
+             Object.values(parsed).find((v) => Array.isArray(v)) || [];
+    } catch {
       return res.status(500).json({ error: "AI returned invalid JSON" });
     }
-
-    console.log(`Query executed successfully (AI), returning ${rows.length} rows`);
 
     return res.json({ rows, foundVia, mode: "ai" });
   } catch (err) {

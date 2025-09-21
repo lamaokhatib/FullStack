@@ -1,17 +1,41 @@
 // server/src/controllers/quickResultController.js
 
+import fs from "fs";
+import os from "os";
+import path from "path";
 
 import { processUploadAndAnalyze } from "../services/uploadService.js";
-import { runSqlQuery } from "./queryController.js"; // same folder, keep "./"
+import { runSqlQuery } from "./queryController.js";
 import { saveMessageByThreadId } from "../utils/chatRepository.js";
 import { getDb, setDb } from "../config/dbState.js";
-import fileHandler from "../utils/fileHandler.js";
 import openai from "../utils/openaiClient.js";
 
+// Build a lightweight schema from real SQLite (if already a .db)
+async function buildSqliteSchema(dbPath) {
+  const { default: Database } = await import("better-sqlite3");
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all();
+    const schema = {};
+    for (const { name } of tables) {
+      const cols = db.prepare(`PRAGMA table_info("${name}")`).all();
+      schema[name] = cols.map((c) => c.name);
+    }
+    return schema;
+  } finally {
+    db.close();
+  }
+}
 
-import fs from "fs";
+function stripCodeFences(s = "") {
+  return (s || "")
+    .replace(/```(?:sql)?/gi, "")
+    .replace(/```/g, "")
+    .trim()
+    .replace(/^["'`](.*)["'`]$/s, "$1");
+}
 
-// (keep) Generate a quick result from prompt (+ optional file)
+// Generate a quick result from prompt (+ optional file)
 export const quickResult = async (req, res) => {
   try {
     const prompt = req.body?.prompt?.trim();
@@ -22,110 +46,97 @@ export const quickResult = async (req, res) => {
     let fileMsg = null;
     let savedUser = null;
 
-    // (keep) If a file is uploaded → process it silently
     if (req.file) {
       const result = await processUploadAndAnalyze(
         req.file.path,
         prompt,
         threadId,
         true,    // silent
-        userId   // 👈 stamp chat owner
+        userId
       );
-
       threadId = result.threadId;
       fileMsg = result.fileMsg;
       savedUser = result.userMessage || null;
 
-      // (keep) Set DB for schema + query execution
-      setDb(req.file.path);
+      setDb(req.file.path); // executor will ingest as needed
     } else {
-      // (keep) No file → ensure a thread exists
-      if (!threadId) {
-        const thread = await openai.beta.threads.create();
-        threadId = thread.id;
-      }
+      // new thread for quick result
+      const thread = await openai.beta.threads.create();
+      threadId = thread.id;
 
-      // (keep) Save user message (stamps chat owner)
       savedUser = await saveMessageByThreadId({
         threadId,
-        userId,  // 👈
+        userId,
         sender: "user",
         text: prompt,
         title: prompt.slice(0, 60),
       });
     }
 
-    // (keep) Load schema
-    const dbPath = getDb();
-
-    // ADDED: require a real DB file to be present; avoids falling into any AI fallback deeper down
+    let dbPath = getDb();
     if (!dbPath || !fs.existsSync(dbPath)) {
       return res.status(400).json({
         error: "No database loaded. Upload a .db/.sqlite/.sql/.json/.csv file before using Quick Result.",
       });
     }
 
-    const schema = await fileHandler(dbPath);
+    // Optional schema hint if already SQLite
+    let schema = {};
+    try { if (dbPath.endsWith(".db") || dbPath.endsWith(".sqlite")) schema = await buildSqliteSchema(dbPath); } catch {}
 
-    // (keep) Generate SQL with AI — but restrict to a runnable SELECT/WITH
+    // Ask AI for a runnable SQLite SELECT/WITH query (no code fences)
     const completion = await openai.chat.completions.create({
       model: "gpt-4o-mini",
       messages: [
-        // CHANGED: make the model return only a valid SQLite SELECT/WITH query
-        { role: "system", content: "Generate only a valid SQLite SELECT or WITH query that runs on the provided schema. No DDL/DML/PRAGMA. No explanations. Return only the raw SQL." },
+        {
+          role: "system",
+          content:
+            "Generate only a valid SQLite SELECT or WITH query that runs on the provided schema. " +
+            "If the data originally comes from PostgreSQL schemas like public.users, rewrite table names to the ingested form (e.g., public_users). " +
+            "No DDL/DML/PRAGMA. No comments. Return only the raw SQL.",
+        },
         {
           role: "user",
-          content: `Schema: ${JSON.stringify(schema)}\n\nRequest: ${prompt}`,
+          content: `Schema (may be partial): ${JSON.stringify(schema)}\n\nRequest: ${prompt}`,
         },
       ],
     });
-    const sql = completion.choices[0].message.content.trim();
 
-    // (keep) Run SQL immediately
+    let sql = stripCodeFences(completion.choices?.[0]?.message?.content || "");
+    if (!sql) return res.status(400).json({ error: "Model returned empty SQL." });
+
+    // Run SQL through the executor (which ingests .sql/.json/.csv → SQLite and repairs if needed)
     let queryResult;
     await runSqlQuery(
       {
         body: {
           query: sql,
           threadId,
-          messageId: savedUser?.message?._id,
-          // ADDED: pass the uploaded file reference so the runner uses the exact file DB
+          messageId: savedUser?.message?._id ?? null,
           dbFileMessageId: fileMsg ? fileMsg._id : null,
         },
       },
       {
-        // (keep) capture the JSON body
-        json: (data) => {
-          queryResult = data;
-          return data;
-        },
-        // FIXED: the stub used `{ code, .data }` which broke error capture
-        status: (code) => ({
-          json: (data) => {
-            queryResult = { code, ...data };
-            return data;
-          },
-        }),
+        json: (data) => { queryResult = data; return data; },
+        status: (code) => ({ json: (data) => { queryResult = { code, ...data }; return data; } }),
       }
     );
 
+    if (queryResult?.error) {
+      return res.status(400).json({ error: queryResult.error });
+    }
     if (!queryResult?.rows) throw new Error("No rows returned");
 
-    // (keep) Save bot result message
     await saveMessageByThreadId({
       threadId,
-      userId, // 👈
+      userId,
       sender: "bot",
       rows: queryResult.rows,
       type: "result",
       dbFileMessageId: fileMsg ? fileMsg._id : null,
     });
 
-    // (keep) Respond to frontend
-    return res.json({
-      rows: queryResult.rows,
-      threadId,
-    });
+    return res.json({ rows: queryResult.rows, threadId });
   } catch (err) {
     console.error("Quick result error:", err);
     res.status(500).json({ error: err.message });
