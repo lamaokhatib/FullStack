@@ -1,3 +1,4 @@
+// server/src/controllers/queryController.js
 import openai from "../utils/openaiClient.js";
 import { setDb, getDb } from "../config/dbState.js";
 import fileHandler from "../utils/fileHandler.js";
@@ -6,9 +7,31 @@ import fs from "fs";
 import os from "os";
 import path from "path";
 
+// Remove a trailing top-level LIMIT (and optional OFFSET) if present
+function stripTrailingLimit(sql = "") {
+  return sql.replace(/\blimit\s+\d+\s*(offset\s+\d+)?\s*;?\s*$/i, "").trim();
+}
+
+// Execute a SELECT/CTE query directly on a SQLite DB path using better-sqlite3
+async function execSqliteSelect(dbPath, sql) {
+  const cleaned = (sql || "").trim();
+  if (!/^(select|with)\b/i.test(cleaned)) {
+    throw new Error("Only SELECT/CTE queries are supported for direct execution");
+  }
+  const { default: Database } = await import("better-sqlite3");
+  const db = new Database(dbPath, { readonly: true });
+  try {
+    const stmt = db.prepare(cleaned);
+    const rows = stmt.all();
+    return rows;
+  } finally {
+    db.close();
+  }
+}
+
 export const runSqlQuery = async (req, res) => {
   try {
-    const { query, messageId, threadId, dbFileMessageId } = req.body;
+    const { query, messageId, threadId, dbFileMessageId, fullExport } = req.body;
 
     if (!query?.trim()) {
       return res.status(400).json({ error: "No SQL query provided." });
@@ -79,9 +102,11 @@ export const runSqlQuery = async (req, res) => {
         console.log("Strategy 3: Searching for any file in thread:", threadId);
         const fileMsg = await Message.findOne({
           threadId,
-          "file.name": { $exists: true, $ne: null },
-        }).sort({ createdAt: -1 });
-        
+          "file.data": { $exists: true, $ne: null },
+        })
+          .sort({ createdAt: -1 })
+          .lean();
+
         if (fileMsg?.file?.data) {
           const tmpPath = path.join(
             os.tmpdir(),
@@ -91,9 +116,9 @@ export const runSqlQuery = async (req, res) => {
           setDb(tmpPath);
           dbPath = tmpPath;
           foundVia = "thread_search";
-          console.log("Strategy 3 SUCCESS: Using DB file from thread search:", tmpPath);
+          console.log("Strategy 3 SUCCESS: Using DB file from thread:", tmpPath);
         } else {
-          console.log("Strategy 3 FAILED: No file messages found in thread");
+          console.log("Strategy 3 FAILED: No file found in thread");
         }
       } catch (err) {
         console.log("Strategy 3 ERROR:", err.message);
@@ -122,6 +147,34 @@ export const runSqlQuery = async (req, res) => {
     }
 
     console.log(`Final result: Using DB found via ${foundVia}: ${dbPath}`);
+
+    // Try direct SQLite execution when a DB file is available
+    if (dbPath) {
+      try {
+        const sqlToRun = fullExport ? stripTrailingLimit(query) : query;
+        if (/^(select|with)\b/i.test(sqlToRun.trim())) {
+          const rows = await execSqliteSelect(dbPath, sqlToRun);
+          console.log(`SQLite executed successfully, returning ${rows.length} rows`);
+          
+          // Clean up temporary file if we created one
+          if (foundVia !== "global_fallback" && dbPath && fs.existsSync(dbPath)) {
+            setTimeout(() => {
+              try {
+                fs.unlinkSync(dbPath);
+                console.log("Cleaned up temporary file:", dbPath);
+              } catch (err) {
+                console.warn("Failed to clean up temporary file:", err.message);
+              }
+            }, 1000);
+          }
+          return res.json({ rows, foundVia });
+        } else {
+          console.log("Non-SELECT query; falling back to AI simulation path");
+        }
+      } catch (e) {
+        console.warn("SQLite execution failed, falling back to AI:", e.message);
+      }
+    }
 
     // Load schema
     const schema = await fileHandler(dbPath);
