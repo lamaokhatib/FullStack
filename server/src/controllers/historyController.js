@@ -6,40 +6,38 @@ import User from '../schemas/userSchema.js';
 // Get all uploaded files from *this user's* message history
 export const getUploadHistory = async (req, res) => {
   try {
-    // Resolve session & direct user id candidates
+    // 1) Resolve userId from session header or explicit param
     const headerSession =
       req.get("X-Session-Id") ||
       req.headers["x-session-id"] ||
       null;
 
-    const directUserId =
-      req.userId ||
+    let userId =
+      req.userId ||  
       req.query?.userId ||
       req.body?.userId ||
       null;
 
-    // If no direct user id, try resolving via session
-    const sessionUser = (!directUserId && headerSession)
-      ? await User.findOne({ sessionId: headerSession }).select("_id")
-      : null;
-
-    const userId = directUserId ?? (sessionUser ? sessionUser._id.toString() : null);
+    if (!userId && headerSession) {
+      const user = await User.findOne({ sessionId: headerSession }).select("_id");
+      if (user) userId = user._id.toString();
+    }
 
     if (!userId) {
       return res.status(401).json({ error: "Unauthorized (missing user/session)" });
     }
 
-    // Find this user's chats
+    // 2) Find all chats owned by this user
     const chats = await Chat.find({ user: userId })
       .select("_id threadId")
       .lean();
 
     const chatIds = chats.map(c => c._id);
     if (chatIds.length === 0) {
-      return res.json([]);
+      return res.json([]); // no chats → no uploads
     }
 
-    // Messages with files from those chats
+    // 3) Find messages from these chats that include files
     const messagesWithFiles = await Message.find({
       chat: { $in: chatIds },
       "file.name": { $exists: true, $ne: null }
@@ -49,7 +47,7 @@ export const getUploadHistory = async (req, res) => {
       .limit(50)
       .lean();
 
-    // Transform for frontend
+    // 4) Transform for frontend
     const history = messagesWithFiles.map(msg => ({
       id: msg._id.toString(),
       name: msg.file.name,
